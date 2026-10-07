@@ -265,7 +265,16 @@ class ClinicalGraph:
 
     # -- construction ----------------------------------------------------
     def _add(self, nid: str, ntype: str, ts: str, payload: dict) -> None:
-        self.nodes[nid] = {"id": nid, "type": ntype, "time": ts, **payload}
+        # Structural keys are authoritative and must survive payload expansion.
+        # Encounter payloads carry their own `type` (the visit kind:
+        # "inpatient"/"outpatient"), which used to overwrite the node type.
+        # That collision was invisible in by_type — it indexes before the
+        # spread — so it silently broke every consumer filtering nodes by type.
+        # The visit kind is preserved under `encounter_type`, which cannot collide.
+        payload = dict(payload)
+        if "type" in payload and ntype == "Encounter":
+            payload["encounter_type"] = payload.pop("type")
+        self.nodes[nid] = {**payload, "id": nid, "type": ntype, "time": ts}
         self.by_type[ntype].append(nid)
 
     def _edge(self, a: str, b: str, etype: str) -> None:

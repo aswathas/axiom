@@ -9,3 +9,7 @@ __pycache__/
 *.db
 axiom.db
 .DS_Store
+e2e*.db
+dbg.db
+demo_docs/
+.llm_cache/

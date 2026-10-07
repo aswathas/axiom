@@ -54,16 +54,42 @@ class Fact:
 This is what `ClinicalGraph(patient)` consumes (`axiom/graph.py:255`). **Do not
 change the shape** — the existing engine indexes all eight keys.
 
+> **Correction (2026-10-07).** An earlier revision of this contract specified the
+> identity key as `id`. That was wrong. `axiom.clinical` emits `patient_id`
+> (`clinical.py:256`) and `axiom.pipeline` indexes `patient["patient_id"]` at
+> lines 595, 615 and 625. The engine is canonical. Caught during integration by
+> an agent that read both sides instead of trusting the contract — which is
+> exactly the failure mode this project exists to prevent, so it is recorded
+> here rather than quietly fixed.
+>
+> **Node typing rule.** A node's `type` is structural and cannot be shadowed by
+> payload data. Encounter payloads carry a visit kind in `type`
+> (`"inpatient"`/`"outpatient"`); that value is preserved as
+> `encounter_type`. Consumers filter nodes on `type` and may rely on it.
+>
+> **`meds` key is `drug`, not `name`.** A second revision of this contract got
+> this wrong. `axiom.clinical` emits `drug` (`clinical.py:345`) and
+> `graph.py`'s drug-interaction pass indexes `nodes[m]["drug"]`
+> (`graph.py:337,345,348`). Building a patient from uploaded documents with
+> `name` produced a `KeyError: 'drug'` the moment the patient had two
+> overlapping prescriptions — precisely the case the interaction demo needs.
+>
+> **Lesson, recorded deliberately.** Three defects in this file were caught
+> because an integrating agent read the engine rather than trusting the
+> contract. A contract written from memory of a codebase is a liability; where
+> this contract and the engine disagree, **the engine is canonical** and this
+> file is wrong until proven otherwise.
+
 ```python
 {
-  "id": "pat_001",
+  "patient_id": "pat_001",          <-- canonical. NOT "id" (see note below)
   "name": "Bergman, L.",
   "dob": "1964-04-12",
   "mrn": "MRN762900",
   "encounters": [{"id","start","type","source_doc_id","source_page"}],
   "diagnoses":  [{"id","code","display","onset","category","source_doc_id","source_page"}],
   "labs":       [{"id","loinc","value","unit","observed_at","ref_low","ref_high"}],
-  "meds":       [{"id","name","rxnorm","dose","frequency","start","end","active"}],
+  "meds":       [{"id","drug","rxnorm","dose","frequency","start","end","active"}],
   "allergies":  [{"id","substance","reaction","recorded_at"}],
   "imaging":    [{"id","modality","display","reported_at"}],
   "notes":      [{"id","text","observed_at","stance"}],

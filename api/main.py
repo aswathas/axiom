@@ -31,44 +31,47 @@ def get_store(path: Optional[str] = None) -> Store:
     return Store(path or _DB_PATH)
 
 
-@asynccontextmanager
-async def _lifespan(application: FastAPI):
-    application.state.store = get_store()
-    try:
-        from axiom.llm import LLMClient  # type: ignore
+def _make_lifespan(db_path: Optional[str]):
+    """Build a lifespan that binds the store for BOTH the factory path and the
+    module-level `app`.
 
-        set_llm_client(LLMClient())
-    except Exception:
-        # No key, no module, no client — AXIOM still answers and still refuses
-        # correctly. The LLM is an assist over the planner, never a dependency.
-        set_llm_client(None)
-    yield
-    store: Optional[Store] = getattr(application.state, "store", None)
-    if store is not None:
-        store.close()
+    This used to be attached only when `db_path` was passed. Every test called
+    `create_app(tmp_path)` and therefore got a store, while `uvicorn
+    api.main:app` — which is `create_app()` with no path — got no lifespan at
+    all, so `app.state.store` never existed and every store-backed route
+    returned a 500. The test suite could not see it because it never exercised
+    the production entrypoint.
+    """
+
+    @asynccontextmanager
+    async def _lifespan(application: FastAPI):
+        application.state.store = get_store(db_path)
+        try:
+            from axiom.llm import LLMClient  # type: ignore
+
+            set_llm_client(LLMClient())
+        except Exception:
+            # No key, no module, no client — AXIOM still answers and still
+            # refuses correctly. The LLM is an assist over the planner, never a
+            # dependency of correctness.
+            set_llm_client(None)
+        yield
+        store: Optional[Store] = getattr(application.state, "store", None)
+        if store is not None:
+            store.close()
+
+    return _lifespan
 
 
 def create_app(db_path: Optional[str] = None) -> FastAPI:
     """Application factory — ``db_path`` is what the tests inject a tmp file into."""
-    application = FastAPI(title="AXIOM", version="1.0.0",
-                          description="Calibrated clinical reasoning that refuses "
-                                      "when the record cannot support an answer.")
-
-    if db_path is not None:
-        @asynccontextmanager
-        async def _fixed_lifespan(app: FastAPI, _p: str = db_path):
-            app.state.store = get_store(_p)
-            try:
-                from axiom.llm import LLMClient  # type: ignore
-                set_llm_client(LLMClient())
-            except Exception:
-                set_llm_client(None)
-            yield
-            s: Optional[Store] = getattr(app.state, "store", None)
-            if s is not None:
-                s.close()
-
-        application.router.lifespan_context = _fixed_lifespan
+    application = FastAPI(
+        title="AXIOM",
+        version="1.0.0",
+        description="Calibrated clinical reasoning that refuses when the record "
+                    "cannot support an answer.",
+        lifespan=_make_lifespan(db_path),
+    )
 
     application.add_middleware(
         CORSMiddleware,

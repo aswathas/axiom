@@ -357,11 +357,25 @@ def test_upload_empty_is_400(client):
     assert r.status_code == 400
 
 
-def test_upload_to_unknown_patient_is_404(client):
+def test_upload_to_unknown_patient_creates_them(client):
+    """Uploading for a patient we have never seen must succeed, not 404.
+
+    This previously raised 404, which made it impossible to ever create a
+    patient's first document — the patient list stayed permanently empty and the
+    demo could not ingest anything. Identity is read from the document header
+    instead of being demanded as form input.
+    """
     r = client.post("/api/upload",
                     files={"file": ("lab.txt", LAB_TEXT.encode("utf-8"), "text/plain")},
                     data={"patient_id": "ghost"})
-    assert r.status_code == 404
+    assert r.status_code == 200, r.text
+    assert r.json()["patient_id"] == "ghost"
+
+    listed = client.get("/api/patients").json()
+    assert any(p["id"] == "ghost" for p in listed), listed
+
+    # And the chart is immediately queryable.
+    assert client.get("/api/patients/ghost/graph").status_code == 200
 
 
 def test_page_endpoint_404_for_unknown_doc_and_page(client):

@@ -10,9 +10,11 @@ from __future__ import annotations
 
 import hashlib
 import io
+import re
 from typing import Any
 
-__all__ = ["extract_pages", "SUPPORTED_SUFFIXES", "UnsupportedDocument"]
+__all__ = ["extract_pages", "extract_demographics", "SUPPORTED_SUFFIXES",
+           "UnsupportedDocument"]
 
 SUPPORTED_SUFFIXES = {".pdf", ".txt", ".md", ".text"}
 
@@ -106,3 +108,44 @@ def extract_pages(data: bytes, filename: str) -> list[dict[str, Any]]:
 
 def sha256_hex(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+# Demographics appear in the header block of every layout we render. Uploading
+# a document for a patient we have never seen is the normal path — it is how a
+# chart starts — so identity is read from the document itself rather than
+# demanded as form input.
+_DEMOGRAPHICS_PATTERNS = {
+    "name": re.compile(r"^\s*Patient:\s*(?P<v>.+?)\s{2,}\S", re.MULTILINE),
+    "mrn": re.compile(r"\bMRN:\s*(?P<v>[A-Za-z0-9\-]+)"),
+    "dob": re.compile(r"\bDOB:\s*(?P<v>\d{2}/\d{2}/\d{4})"),
+}
+
+_NAME_FALLBACK = re.compile(r"^\s*Patient:\s*(?P<v>\S.*?)\s*$", re.MULTILINE)
+
+
+def extract_demographics(text: str) -> dict[str, str]:
+    """Pull patient identity out of a document header.
+
+    Returns a dict with only the keys that were actually found. Anything absent
+    is simply omitted rather than guessed — an MRN we invent is worse than one
+    we do not have, and this whole project is about not publishing what the
+    record does not support.
+    """
+    out: dict[str, str] = {}
+
+    m = _DEMOGRAPHICS_PATTERNS["name"].search(text) or _NAME_FALLBACK.search(text)
+    if m:
+        out["name"] = m.group("v").strip()
+
+    for key in ("mrn", "dob"):
+        mm = _DEMOGRAPHICS_PATTERNS[key].search(text)
+        if mm:
+            out[key] = mm.group("v").strip()
+
+    if "dob" in out:
+        try:
+            mm_, dd, yyyy = out["dob"].split("/")
+            out["dob"] = f"{yyyy}-{int(mm_):02d}-{int(dd):02d}"
+        except ValueError:
+            out.pop("dob")
+    return out

@@ -33,7 +33,10 @@ def empty_patient(pid: str, name: str = "Unknown", dob: str = "",
                   mrn: str = "") -> dict[str, Any]:
     """A valid patient with every collection present and empty."""
     return {
-        "id": pid,
+        # `patient_id` is canonical: axiom.clinical emits it (clinical.py:256)
+        # and axiom.pipeline indexes it in three places. An earlier contract
+        # specified `id`, which made those two disagree. The engine is right.
+        "patient_id": pid,
         "name": name,
         "dob": dob,
         "mrn": mrn,
@@ -88,7 +91,13 @@ def build_patient(facts: Iterable[Fact], pid: str = "pat_001",
         elif f.kind == "med":
             p["meds"].append({
                 "id": _next_id("med", used),
-                "name": f.name, "rxnorm": f.meta.get("rxnorm"),
+                # `drug`, not `name`: axiom.clinical emits `drug`
+                # (clinical.py:345) and graph.py's interaction pass indexes
+                # nodes[m]["drug"] at lines 337/345/348. A contract that said
+                # `name` produced a KeyError the moment a patient had two
+                # overlapping prescriptions — which is exactly the case the
+                # interaction demo depends on.
+                "drug": f.name, "rxnorm": f.meta.get("rxnorm"),
                 "dose": f.meta.get("dose"), "frequency": f.meta.get("frequency"),
                 "start": f.timestamp, "end": f.meta.get("end"),
                 "active": f.meta.get("active", True), **prov,

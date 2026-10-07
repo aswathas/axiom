@@ -21,7 +21,8 @@ from axiom.graph import ClinicalGraph  # noqa: F401  (re-exported for callers)
 from axiom.pipeline import AxiomPipeline
 
 from .engine import build_graph, contract2_to_engine, engine_to_contract2, normalise_patient
-from .ingest import UnsupportedDocument, extract_pages, sha256_hex
+from .ingest import (UnsupportedDocument, extract_demographics, extract_pages,
+                      sha256_hex)
 from .planner import build_planner
 
 log = logging.getLogger("axiom.api")
@@ -197,7 +198,16 @@ def _detect_kind(text: str) -> str:
 @router.post("/upload")
 async def upload(request: Request,
                  file: UploadFile = File(...),
-                 patient_id: Optional[str] = Form(default=None)) -> dict[str, Any]:
+                 patient_form: Optional[str] = Form(default=None, alias="patient_id"),
+                 patient_id: Optional[str] = Query(default=None)) -> dict[str, Any]:
+    """Ingest a document.
+
+    ``patient_id`` is accepted as a form field *or* a query parameter. Declaring
+    it only as a Form field meant a caller passing ``?patient_id=`` got a silent
+    200 with no patient attached — the request looked successful and ingested
+    nothing, which is the worst possible failure mode. Both are honoured.
+    """
+    patient_id = patient_id or patient_form
     store = request.app.state.store
     data = await file.read()
     try:
@@ -216,20 +226,70 @@ async def upload(request: Request,
             all_facts.append(f.to_dict() if hasattr(f, "to_dict") else dict(f))
 
     if patient_id and store.get_patient(patient_id) is None:
-        raise HTTPException(404, f"unknown patient {patient_id!r}")
+        # Uploading a document for a patient we have never seen is the normal
+        # path, not an error — it is how a chart begins. Identity comes from the
+        # document header. Previously this raised 404, which meant the very
+        # first upload of a new patient could never succeed, and the patient
+        # list stayed permanently empty.
+        existing = store.create_patient({
+            "patient_id": patient_id,
+            **extract_demographics(pages[0]["text"]),
+        })
 
     store.save_document(doc_id, patient_id, file.filename or "", kind, sha, pages)
     store.save_facts(patient_id, doc_id, all_facts)
+
+    # Rebuild from every fact accumulated so far, not just this document — the
+    # graph is a view over the whole chart, and a second lab report must be
+    # able to complete a trend the first one could not.
+    if patient_id:
+        try:
+            _rebuild_patient(store, patient_id)
+        except Exception:
+            log.exception("fact extraction stored, but chart rebuild failed")
 
     return {
         "doc_id": doc_id,
         "kind": kind,
         "sha256": sha,
         "filename": file.filename or "",
+        "patient_id": patient_id,
         "facts": all_facts,
         "pages": [{"page_no": p["page_no"], "chars": len(p["text"]),
                    "kind": p["kind"]} for p in pages],
     }
+
+
+def _rebuild_patient(store: Any, patient_id: str) -> dict[str, Any]:
+    """Re-derive the patient's chart from all stored facts."""
+    from axiom.facts import from_dict as fact_from_dict
+    from axiom.patient import build_patient
+
+    prior = store.get_patient(patient_id) or {}
+    raw_facts = store.get_facts_for_patient(patient_id)
+    facts = []
+    for rf in raw_facts:
+        payload = rf.get("fact_json") or rf
+        if isinstance(payload, str):
+            import json as _json
+            try:
+                payload = _json.loads(payload)
+            except ValueError:
+                continue
+        try:
+            facts.append(fact_from_dict(payload))
+        except (TypeError, ValueError):
+            continue
+
+    patient = build_patient(
+        facts,
+        pid=patient_id,
+        name=prior.get("name", "") or "",
+        dob=prior.get("dob", "") or "",
+        mrn=prior.get("mrn", "") or "",
+    )
+    store.update_patient(patient)
+    return patient
 
 
 # ---------------------------------------------------------------------------
