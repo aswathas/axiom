@@ -38,12 +38,19 @@ class LLMUnavailable(RuntimeError):
 
 # ---------------------------------------------------------------- config --
 
+# Default models are ids verified to resolve on the providers' free tiers.
+# Gemini-flash ids were rejected here and must not become the default again:
+#   google/gemini-2.0-flash-001 -> HTTP 404
+#   google/gemini-2.5-flash     -> HTTP 402
+#   google/gemini-flash-1.5     -> HTTP 404
+# Override per deployment with OPENROUTER_MODEL / MINIMAX_MODEL.
+
 PROVIDERS: dict[str, dict[str, str]] = {
     "openrouter": {
         "endpoint": "https://openrouter.ai/api/v1/chat/completions",
         "env_key": "OPENROUTER_API_KEY",
         "env_model": "OPENROUTER_MODEL",
-        "default_model": "google/gemini-2.0-flash-001",
+        "default_model": "openai/gpt-4o-mini",
     },
     "minimax": {
         "endpoint": "https://api.minimax.io/v1/chat/completions",
@@ -319,6 +326,19 @@ class LLMClient:
                     f"{self.provider} returned a non-JSON response "
                     f"({exc.msg}).") from None
             except BaseException as exc:  # noqa: BLE001 - isolation on purpose
+                if isinstance(exc, urllib.error.HTTPError):
+                    code = getattr(exc, "code", 0) or 0
+                    if code in (400, 404):
+                        # Almost always a bad/retired model id, not an outage.
+                        # Say so loudly: this used to be indistinguishable from
+                        # a network failure and cost real debugging time.
+                        raise LLMUnavailable(
+                            f"{self.provider} rejected model "
+                            f"{self.model!r} (HTTP {code}). The model id does "
+                            f"not resolve on this provider. Set "
+                            f"{PROVIDERS[self.provider]['env_model']} or pass "
+                            f"model= explicitly."
+                        ) from None
                 if not _is_retryable(exc):
                     raise LLMUnavailable(
                         f"{self.provider} request failed: "

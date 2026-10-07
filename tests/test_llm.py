@@ -337,6 +337,77 @@ def test_401_is_not_retried(monkeypatch, tmp_path):
     assert fake.n_calls == 1
 
 
+# ------------------------------------------ 404 = bad model, not an outage --
+
+def test_default_openrouter_model_resolves(monkeypatch, tmp_path):
+    """The shipped default must not be an id that 404s on the free tier."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", FAKE_KEY)
+    c = LLMClient(cache_dir=str(tmp_path))
+    assert c.model == "openai/gpt-4o-mini"
+    known_bad = ("google/gemini-2.0-flash-001", "google/gemini-2.5-flash",
+                 "google/gemini-flash-1.5")
+    assert c.model not in known_bad
+    assert "gemini" not in llm_mod.PROVIDERS["openrouter"]["default_model"]
+
+
+def test_404_names_the_model_and_is_not_retried(monkeypatch, tmp_path):
+    client, fake = make_client(monkeypatch, tmp_path, model="stale/model-id",
+                               script=[http_error(404)])
+    with pytest.raises(LLMUnavailable) as ei:
+        client.json("s", "u")
+    msg = str(ei.value)
+    assert "stale/model-id" in msg      # says WHICH model is broken
+    assert "404" in msg
+    assert "OPENROUTER_MODEL" in msg    # says HOW to fix it
+    assert fake.n_calls == 1            # a bad id will never succeed; don't retry
+
+
+def test_404_message_is_distinguishable_from_network_failure(monkeypatch,
+                                                               tmp_path):
+    client, _ = make_client(monkeypatch, tmp_path, model="stale/model-id",
+                            script=[http_error(404)])
+    with pytest.raises(LLMUnavailable) as model_err:
+        client.json("s", "u")
+
+    client2, _ = make_client(monkeypatch, tmp_path / "net",
+                             script=[http_error(500)] * 3)
+    with pytest.raises(LLMUnavailable) as net_err:
+        client2.json("s", "u")
+
+    assert str(model_err.value) != str(net_err.value)
+    assert "rejected model" in str(model_err.value)
+    assert "unavailable after" in str(net_err.value)
+
+
+def test_400_also_reports_a_bad_model(monkeypatch, tmp_path):
+    client, fake = make_client(monkeypatch, tmp_path, script=[http_error(400)])
+    with pytest.raises(LLMUnavailable) as ei:
+        client.json("s", "u")
+    assert "rejected model" in str(ei.value)
+    assert fake.n_calls == 1
+
+
+def test_404_error_does_not_leak_the_key(monkeypatch, tmp_path, capsys):
+    client, _ = make_client(monkeypatch, tmp_path, model="stale/model-id",
+                            script=[http_error(404)])
+    with pytest.raises(LLMUnavailable) as ei:
+        client.json("s", "u")
+    _assert_no_leak(str(ei.value) + repr(ei.value))
+    out = capsys.readouterr()
+    _assert_no_leak(out.out)
+    _assert_no_leak(out.err)
+
+
+def test_402_is_retried_then_reports_like_a_failure(monkeypatch, tmp_path):
+    """402 (payment required) is not retryable and must not masquerade as 404."""
+    client, fake = make_client(monkeypatch, tmp_path, script=[http_error(402)])
+    with pytest.raises(LLMUnavailable) as ei:
+        client.json("s", "u")
+    assert "rejected model" not in str(ei.value)
+    assert "402" in str(ei.value)
+    assert fake.n_calls == 1
+
+
 def test_failed_call_is_not_cached(monkeypatch, tmp_path):
     client, _ = make_client(monkeypatch, tmp_path, script=[http_error(500)] * 3)
     with pytest.raises(LLMUnavailable):
