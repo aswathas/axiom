@@ -1,11 +1,13 @@
 'use client';
 
+import { useReducedMotion } from '../lib/useMotion';
 import {
   ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid,
   Tooltip, ReferenceArea,
 } from 'recharts';
 
 export default function TrendChart({ trend }) {
+  const reducedMotion = useReducedMotion();
   const data = trend.series.map((p) => ({
     date: p.t,
     value: Number(p.v),
@@ -24,11 +26,17 @@ export default function TrendChart({ trend }) {
             tickLine={false}
             axisLine={{ stroke: '#ddd8cc' }}
           />
+          {/* No explicit `domain` here on purpose. Recharts folds a
+              ReferenceArea into the axis extent, so a hardcoded
+              `['dataMin - 0.2', 'dataMax + 0.2']` and the reference band
+              disagree whenever the band sits inside the data range — which
+              produced a Y axis labelled 9999996 and clipped the series to
+              its first two points. Letting the axis auto-scale keeps the band
+              visible and the line intact. */}
           <YAxis
             tick={{ fontSize: 10, fill: '#8a8a8a' }}
             tickLine={false}
             axisLine={{ stroke: '#ddd8cc' }}
-            domain={['dataMin - 0.2', 'dataMax + 0.2']}
           />
           <Tooltip
             contentStyle={{
@@ -49,6 +57,7 @@ export default function TrendChart({ trend }) {
           />
           <Line
             type="monotone"
+            isAnimationActive={!reducedMotion}
             dataKey="value"
             stroke="#c8901e"
             strokeWidth={2.5}

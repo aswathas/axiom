@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 const TYPE_COLOR = {
   Encounter: '#141414',
@@ -25,9 +25,28 @@ const LANES = ['Encounter', 'Diagnosis', 'LabResult', 'MedicationOrder',
  */
 export default function Timeline({ graph }) {
   const { nodes } = graph;
+  const wrapRef = useRef(null);
+  const [width, setWidth] = useState(600);
+
+  // The lanes are drawn in user units and the dots in percentages, which
+  // pinned every event to the right-hand edge of the chart. Measuring the
+  // container puts both in the same pixel space.
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return undefined;
+    const ro = new ResizeObserver(([entry]) => {
+      const w = entry.contentRect?.width;
+      if (w) setWidth(w);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   const { min, max, positioned } = useMemo(() => {
     const times = nodes.map((n) => new Date(n.time).getTime()).filter((t) => !isNaN(t));
+    // An empty or fully undated graph must not produce an Invalid Date on the
+    // axis labels — that throws inside toISOString and blanks the panel.
+    if (!times.length) return { min: null, max: null, positioned: [] };
     const lo = Math.min(...times);
     const hi = Math.max(...times);
     const span = hi - lo || 1;
@@ -45,9 +64,12 @@ export default function Timeline({ graph }) {
   }, [nodes]);
 
   const H = LANES.length * 22 + 26;
+  const GUTTER = 78;                 // room for the lane labels
+  const RIGHT = 6;                   // keep the last dot off the edge
+  const plot = Math.max(40, width - GUTTER - RIGHT);
 
   return (
-    <div style={{ marginTop: 16 }}>
+    <div style={{ marginTop: 16 }} ref={wrapRef}>
       <div style={{ fontSize: 10, color: '#8a8a8a', letterSpacing: 0.8, fontWeight: 700, marginBottom: 8 }}>
         TEMPORAL GRAPH — {positioned.length} EVENTS ON A TIME AXIS
       </div>
@@ -57,7 +79,7 @@ export default function Timeline({ graph }) {
         {LANES.map((lane, i) => (
           <g key={lane}>
             <line
-              x1="78" x2="100%" y1={i * 22 + 14} y2={i * 22 + 14}
+              x1={GUTTER} x2={width} y1={i * 22 + 14} y2={i * 22 + 14}
               stroke="#eee9df" strokeWidth="1"
             />
             <text x="2" y={i * 22 + 18} fontSize="9" fill="#8a8a8a" fontFamily="inherit">
@@ -67,14 +89,14 @@ export default function Timeline({ graph }) {
         ))}
 
         {positioned.map((n) => {
-          const x = 78 + (n.pct / 100) * (100 - 78 - 6);
+          const x = GUTTER + (n.pct / 100) * plot;
           const y = n.lane * 22 + 14;
           const r = n.type === 'Encounter' ? 5 : 3.5;
           return (
             <g key={n.id}>
-              <circle cx={`${x}%`} cy={y} r={r}
+              <circle cx={x} cy={y} r={r}
                       fill={TYPE_COLOR[n.type] || '#8a8a8a'} opacity="0.88">
-                <title>{`${n.type} · ${n.time}\n${n.label}${n.value ? ` = ${n.value} ${n.unit || ''}` : ''}`}</title>
+                <title>{`${n.type} · ${n.time}\n${n.display || n.name || n.substance || n.text || n.id}${n.value != null ? ` = ${n.value} ${n.unit || ''}` : ''}`}</title>
               </circle>
             </g>
           );
@@ -82,8 +104,8 @@ export default function Timeline({ graph }) {
       </svg>
 
       <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9.5, color: '#8a8a8a', marginTop: 2 }}>
-        <span>{new Date(min).toISOString().slice(0, 10)}</span>
-        <span>{new Date(max).toISOString().slice(0, 10)}</span>
+        <span>{min == null ? 'no dated events' : new Date(min).toISOString().slice(0, 10)}</span>
+        <span>{max == null ? '' : new Date(max).toISOString().slice(0, 10)}</span>
       </div>
     </div>
   );
