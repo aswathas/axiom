@@ -1,9 +1,9 @@
 'use client';
 
-import { useCallback, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { API, getGraph, getPatient } from '../lib/api';
 import { useResource } from '../lib/useApi';
-import { computeTrends, docIdsFor, locateTerm, nodeLabel, sourceOf } from '../lib/derive';
+import { computeTrends, docIdsFor, nodeLabel, sourceOf } from '../lib/derive';
 import Cite from './Cite';
 import Timeline from './Timeline';
 import TrendChart from './TrendChart';
@@ -146,8 +146,6 @@ function PatientHeader({ patient, stats, onAsk, loadingGraph }) {
 
 function EvidenceCards({ graph, patient, onSource }) {
   const [filter, setFilter] = useState('all');
-  const [resolving, setResolving] = useState(null);
-  const [unresolved, setUnresolved] = useState({});
 
   const docs = useMemo(() => docIdsFor(patient), [patient]);
 
@@ -166,37 +164,6 @@ function EvidenceCards({ graph, patient, onSource }) {
     const present = Object.keys(grouped);
     return ['all', ...TYPE_ORDER.filter((t) => present.includes(t)), ...present.filter((t) => !TYPE_ORDER.includes(t))];
   }, [grouped]);
-
-  /**
-   * Open a node's source. If the node carries no doc_id we search the text
-   * layer of the documents this record does reference, and we say plainly when
-   * the term cannot be found — an unresolved citation is a bug to surface, not
-   * a gap to paper over.
-   */
-  const open = useCallback(async (node) => {
-    const direct = sourceOf(node);
-    if (direct) {
-      onSource({
-        docId: direct.docId, page: direct.page,
-        charStart: direct.charStart, charEnd: direct.charEnd,
-        label: nodeLabel(node), nodeId: node.id, raw: node,
-      });
-      return;
-    }
-    setResolving(node.id);
-    setUnresolved((u) => ({ ...u, [node.id]: undefined }));
-    const found = await locateTerm(docs, nodeLabel(node).split(' ')[0] || node.display || node.name);
-    setResolving(null);
-    if (found) {
-      onSource({
-        docId: found.docId, page: found.page,
-        charStart: found.charStart, charEnd: found.charEnd,
-        label: nodeLabel(node), nodeId: node.id, raw: node,
-      });
-    } else {
-      setUnresolved((u) => ({ ...u, [node.id]: 'not found in any referenced document' }));
-    }
-  }, [docs, onSource]);
 
   const shown = types.filter((t) => t !== 'all');
   const total = (graph.nodes || []).length;
@@ -227,9 +194,9 @@ function EvidenceCards({ graph, patient, onSource }) {
         <div key={t} style={{ marginTop: 16 }}>
           <div className="subhead">{t.replace(/([A-Z])/g, ' $1').toUpperCase()}</div>
           {(grouped[t] || []).map((node) => {
+            // Location is shown only when the node carries provenance outright;
+            // otherwise Cite resolves it on click and says so if it cannot.
             const direct = sourceOf(node);
-            const busy = resolving === node.id;
-            const note = unresolved[node.id];
             return (
               <div key={node.id} className="evcard">
                 <div className="evcard-main">
@@ -244,22 +211,21 @@ function EvidenceCards({ graph, patient, onSource }) {
                   </div>
                 </div>
                 <div className="evcard-cite">
-                  {note ? (
-                    <span className="noprovenance">{note}</span>
-                  ) : direct ? (
+                  {direct && (
                     <span className="cite-loc">
                       {direct.docId} p{direct.page}
                     </span>
-                  ) : null}
-                  <button
-                    type="button"
-                    className="cite"
-                    onClick={() => open(node)}
-                    disabled={busy}
-                    title="Open the source document for this node"
-                  >
-                    {busy ? 'locating…' : 'source'}
-                  </button>
+                  )}
+                  <Cite
+                    node={node}
+                    graph={graph}
+                    docIds={docs}
+                    onSource={onSource}
+                    label="source"
+                    title={direct
+                      ? `Open ${direct.docId} page ${direct.page}`
+                      : `Locate "${nodeLabel(node)}" in the referenced documents`}
+                  />
                 </div>
               </div>
             );

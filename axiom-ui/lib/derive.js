@@ -135,27 +135,50 @@ export function nodeLabel(node) {
  * character offsets of its own: we look in the real text layer and report the
  * real offsets we found. If it is not found we say so instead of highlighting
  * the whole document, which would be a fake citation.
+ *
+ * Long labels are matched on a ladder: the full string first, then
+ * progressively shorter prefixes. A renderer may print "Chronic kidney
+ * disease, stage 3" where the label says "Chronic kidney disease", and
+ * searching only the first word would resolve "Chronic" to whatever sentence
+ * happens to contain it — technically a highlight, practically a wrong
+ * citation. The ladder stops at the longest prefix that actually appears.
  */
 export async function locateTerm(docIds, term, maxPages = 3) {
-  const needle = String(term || '').trim();
-  if (!needle) return null;
+  const full = String(term || '').trim();
+  if (!full) return null;
 
+  const needles = [full];
+  const words = full.split(/\s+/);
+  for (const n of [4, 2, 1]) {
+    if (words.length > n) {
+      const shorter = words.slice(0, n).join(' ').replace(/[,;]$/, '');
+      if (shorter && !needles.includes(shorter)) needles.push(shorter);
+    }
+  }
+
+  // Page text is fetched once per document and reused across the ladder,
+  // otherwise a five-candidate search would re-request every page five times.
+  const pages = [];
   for (const docId of docIds) {
     for (let p = 1; p <= maxPages; p += 1) {
-      let page;
       try {
         const res = await getPage(docId, p);
-        if (res.offline && res.offlineReason && !res.data) continue;
-        page = res.data;
+        if (!res.data || !res.data.text) break;
+        pages.push({ docId, text: res.data.text, page: res.data.page });
       } catch {
-        break; // page does not exist on this document
+        break; // this document has no such page
       }
-      if (!page || !page.text) break;
+    }
+  }
+  if (!pages.length) return null;
 
-      const idx = page.text.indexOf(needle);
+  for (const needle of needles) {
+    for (const pg of pages) {
+      const idx = pg.text.indexOf(needle);
       if (idx >= 0) {
         return {
-          docId, page: page.page, charStart: idx, charEnd: idx + needle.length,
+          docId: pg.docId, page: pg.page,
+          charStart: idx, charEnd: idx + needle.length,
           resolvedBy: 'text-search', term: needle,
         };
       }

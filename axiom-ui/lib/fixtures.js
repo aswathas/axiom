@@ -104,12 +104,6 @@ export const DOCS = {
 /* Contract 2 patient dict                                             */
 /* ------------------------------------------------------------------ */
 
-function span(text, needle) {
-  const i = text.indexOf(needle);
-  if (i < 0) return [0, 0];
-  return [i, i + needle.length];
-}
-
 export const PATIENTS = [
   {
     id: 'pat_001',
@@ -128,11 +122,6 @@ export const PATIENTS = [
     node_count: 0,
   },
 ];
-
-const P1_ENC = span(DISCHARGE_PAGE, 'Chronic kidney disease, stage 3');
-const P1_MED = span(PHARMACY_PAGE, 'Metformin');
-const P1_WAR = span(PHARMACY_PAGE, 'Warfarin');
-const P1_LIS = span(PHARMACY_PAGE, 'Lisinopril');
 
 export const PATIENT_DETAIL = {
   pat_001: {
@@ -213,9 +202,6 @@ export const PATIENT_DETAIL = {
     vitals: [],
   },
 };
-
-// referenced above by span() only for readability; retained for provenance math
-export const PROVENANCE_ANCHORS = { P1_ENC, P1_MED, P1_WAR, P1_LIS };
 
 /* ------------------------------------------------------------------ */
 /* Graph built the same way ClinicalGraph builds it                   */
@@ -304,32 +290,6 @@ Object.values(PATIENT_DETAIL).forEach((p) => {
 /* Fallback /api/ask responses                                         */
 /* ------------------------------------------------------------------ */
 
-export const ASK_ANSWERED = {
-  patient_id: 'pat_001',
-  query: 'Is the renal function deteriorating?',
-  plan: { intent: 'trend', entity: 'creatinine', window_months: 12 },
-  refused: false,
-  refusal_reason: null,
-  status: 'answered',
-  published: [
-    {
-      claim_id: 'clm_0007',
-      text: 'Renal function is deteriorating: creatinine rose from 0.85 mg/dL to 1.48 mg/dL over 9 months, crossing the 1.30 mg/dL upper reference limit at the 2025-01-16 draw.',
-      claim_type: 'deterioration',
-      severity: 'high',
-      cited_nodes: ['lab_cr_01', 'lab_cr_02', 'lab_cr_03', 'lab_cr_04', 'dx_ckd3'],
-      raw_confidence: 0.93,
-      verdict: 'ENTAILED',
-      calibrated_score: 0.91,
-      final: true,
-      abstained: false,
-      reason: '',
-    },
-  ],
-  abstained: [],
-  audit_ref: 'audit/0041',
-};
-
 export const ASK_REFUSED = {
   patient_id: 'pat_001',
   query: "What is this patient's blood type?",
@@ -350,52 +310,6 @@ export const ASK_REFUSED = {
     },
   ],
   audit_ref: 'audit/0042',
-};
-
-export const UPLOAD_RESULT = {
-  doc_id: 'doc_lab0425',
-  kind: 'lab_report',
-  sha256: '0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0',
-  filename: 'quest_renal_panel_2025-04-15.pdf',
-  facts: [
-    {
-      kind: 'lab', name: 'Creatinine', value: 1.48, unit: 'mg/dL',
-      timestamp: '2025-04-15', loinc: '2160-0',
-      ref_low: 0.6, ref_high: 1.3, abnormal: true, negated: false, meta: {},
-      source_doc_id: 'doc_lab0425', source_page: 1,
-      source_char_start: LAB_PAGE.indexOf('1.48'),
-      source_char_end: LAB_PAGE.indexOf('1.48') + 4,
-      extractor: 'regex',
-    },
-    {
-      kind: 'lab', name: 'eGFR', value: 41, unit: 'mL/min/1.73m2',
-      timestamp: '2025-04-15', loinc: '33914-3',
-      ref_low: 90, ref_high: 140, abnormal: true, negated: false, meta: {},
-      source_doc_id: 'doc_lab0425', source_page: 1,
-      source_char_start: LAB_PAGE.indexOf('41'),
-      source_char_end: LAB_PAGE.indexOf('41') + 2,
-      extractor: 'regex',
-    },
-    {
-      kind: 'lab', name: 'Potassium', value: 5.2, unit: 'mmol/L',
-      timestamp: '2025-04-15', loinc: '2823-3',
-      ref_low: 3.5, ref_high: 5.1, abnormal: true, negated: false, meta: {},
-      source_doc_id: 'doc_lab0425', source_page: 1,
-      source_char_start: LAB_PAGE.indexOf('5.20'),
-      source_char_end: LAB_PAGE.indexOf('5.20') + 4,
-      extractor: 'regex',
-    },
-    {
-      kind: 'lab', name: 'Sodium', value: 131.0, unit: 'mmol/L',
-      timestamp: '2025-04-15', loinc: '2951-2',
-      ref_low: 135.0, ref_high: 145.0, abnormal: true, negated: false, meta: {},
-      source_doc_id: 'doc_lab0425', source_page: 1,
-      source_char_start: LAB_PAGE.indexOf('131.0'),
-      source_char_end: LAB_PAGE.indexOf('131.0') + 5,
-      extractor: 'regex',
-    },
-  ],
-  pages: [{ page_no: 1, chars: LAB_PAGE.length, kind: 'lab_report' }],
 };
 
 /* ------------------------------------------------------------------ */

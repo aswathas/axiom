@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo } from 'react';
-import { API, getGraph, listAudit, listPatients } from '../lib/api';
+import { API, listAudit, listPatients } from '../lib/api';
 import { useResource } from '../lib/useApi';
 import Benchmark from './Benchmark';
 import { LoadingCards, Notice, OfflineNotice } from './Chrome';
@@ -159,14 +159,4 @@ function computeMetrics(rows) {
   }
 
   return { metrics, notes };
-}
-
-/**
- * Citation validity needs the graph, which is a second fetch. Exported so the
- * panel can be extended without reshaping this file once agent D finalises
- * the audit schema.
- */
-export async function citationValidity(patientId) {
-  const g = await getGraph(patientId);
-  return (g.data?.nodes || []).map((n) => n.id);
 }

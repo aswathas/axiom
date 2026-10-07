@@ -70,19 +70,3 @@ export function OfflineNotice({ api, onRetry, reason }) {
     </Notice>
   );
 }
-
-/** A citation chip that resolves to a document. Renders as a real button. */
-export function CiteButton({ label, onClick, title, dead = false }) {
-  if (dead) {
-    return (
-      <span className="cite dead" title={title || 'This node has no resolvable source'}>
-        {label}
-      </span>
-    );
-  }
-  return (
-    <button type="button" className="cite" onClick={onClick} title={title}>
-      {label}
-    </button>
-  );
-}

@@ -21,15 +21,63 @@ export default function SourceDrawer({ target, onClose }) {
   const [page, setPage] = useState(target.page || 1);
   const [state, setState] = useState({ loading: true, data: null, error: null });
   const closeRef = useRef(null);
+  const panelRef = useRef(null);
   const textRef = useRef(null);
 
+  /**
+   * Modal focus behaviour.
+   *
+   * Two things a plain conditional render gets wrong, both of which strand a
+   * keyboard or screen-reader user:
+   *   1. focus is never returned to the citation that opened the drawer, so
+   *      after closing, Tab resumes from the top of the document;
+   *   2. Tab walks straight out of the dialog and into the page behind it,
+   *      which is still visible and still focusable.
+   * So: remember the trigger, cycle Tab within the panel, and put focus back.
+   *
+   * The trigger is captured and Close is focused in ONE effect on purpose.
+   * Split across two, the ordering means the second effect reads
+   * document.activeElement *after* the first has already moved focus into the
+   * drawer, so it remembers the Close button — which is destroyed on unmount,
+   * and focus lands on <body> instead of where the user left off.
+   */
+  const returnTo = useRef(null);
+
   useEffect(() => {
+    returnTo.current = document.activeElement;
     closeRef.current?.focus();
+    return () => {
+      const el = returnTo.current;
+      if (el && typeof el.focus === 'function' && document.contains(el)) el.focus();
+    };
   }, []);
 
   useEffect(() => {
     const onKey = (e) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        onClose();
+        return;
+      }
+      if (e.key !== 'Tab') return;
+
+      const panel = panelRef.current;
+      if (!panel) return;
+      const focusable = panel.querySelectorAll(
+        'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), '
+        + 'textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      );
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -67,6 +115,7 @@ export default function SourceDrawer({ target, onClose }) {
   return (
     <div className="drawer-backdrop" onClick={onClose}>
       <div
+        ref={panelRef}
         className="drawer drawer-wide"
         role="dialog"
         aria-modal="true"

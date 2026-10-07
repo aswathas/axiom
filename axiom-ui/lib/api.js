@@ -17,7 +17,7 @@
 
 import {
   PATIENTS, PATIENT_DETAIL, buildGraph, DOCS,
-  ASK_ANSWERED, ASK_REFUSED, UPLOAD_RESULT, FALLBACK_LIMITATIONS,
+  ASK_REFUSED,
 } from './fixtures';
 
 /**
@@ -191,6 +191,7 @@ export async function uploadDocument(file, patientId) {
     throw offlineMessage('/api/upload');
   }
   if (!res.ok) {
+    if (res.status >= 500) throw offlineMessage('/api/upload');
     const detail =
       (res.body && (res.body.detail || res.body.message)) || `HTTP ${res.status}`;
     throw new ApiError(
@@ -220,6 +221,18 @@ export async function ask(patientId, query) {
              offlineReason: 'backend unreachable — showing the refusal this record would produce' };
   }
   if (!res.ok) {
+    // Same rule as withFallback: behind the Next proxy a dead backend surfaces
+    // as a 5xx rather than a transport failure. Without this branch a backend
+    // outage rendered as a red REQUEST FAILED box — telling the clinician
+    // AXIOM crashed, when the truth is that it had no evidence to work with
+    // and declined for exactly that reason.
+    if (res.status >= 500) {
+      return {
+        ...refusalFallback(patientId, query),
+        offline: true,
+        offlineReason: `backend responded ${res.status} (treated as unreachable)`,
+      };
+    }
     const detail =
       (res.body && (res.body.detail || res.body.message)) || `HTTP ${res.status}`;
     throw new ApiError(
@@ -278,17 +291,6 @@ export async function getPage(docId, pageNo) {
 /* Audit                                                               */
 /* ------------------------------------------------------------------ */
 
-export async function getAudit(claimId) {
-  const { body, status } = await raw(
-    `/api/audit/${encodeURIComponent(claimId)}`,
-    { cache: 'no-store' },
-  ).catch(() => ({ ok: false, status: 0, body: null }));
-  if (!status || status >= 400) {
-    return { data: null, offline: true, missing: true };
-  }
-  return { data: body, offline: false };
-}
-
 export async function listAudit(patientId) {
   const qs = patientId ? `?patient_id=${encodeURIComponent(patientId)}&limit=25` : '?limit=25';
   const { ok, body } = await raw(`/api/audit${qs}`, { cache: 'no-store' }).catch(() => ({
@@ -297,4 +299,3 @@ export async function listAudit(patientId) {
   return { data: ok && Array.isArray(body) ? body : [], offline: !ok };
 }
 
-export { FALLBACK_LIMITATIONS };
