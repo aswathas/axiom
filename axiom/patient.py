@@ -1,0 +1,148 @@
+"""Patient record assembly — turns extracted Facts into the dict shape that
+``ClinicalGraph`` consumes.
+
+See docs/CONTRACTS.md Contract 2. The shape mirrors ``axiom.clinical.make_patient``
+output exactly, because the graph engine indexes all eight collections by key
+and will raise KeyError if any is missing.
+
+The separation matters: extraction produces unordered, possibly duplicated
+observations from several documents. This module's job is to deduplicate,
+order them in time, and hand the graph a record it can trust.
+"""
+
+from __future__ import annotations
+
+from typing import Any, Iterable, Optional
+
+from .facts import Fact, is_abnormal
+
+COLLECTIONS = ("encounters", "diagnoses", "labs", "meds",
+               "allergies", "imaging", "notes", "vitals")
+
+# Reverse lookup from analyte display name to LOINC, built once from the single
+# authoritative source rather than a second hardcoded copy in the parser.
+def _loinc_index() -> dict[str, str]:
+    from .clinical import ANALYTES
+    return {display.lower(): code for code, (display, *_rest) in ANALYTES.items()}
+
+
+_LOINC = _loinc_index()
+
+
+def empty_patient(pid: str, name: str = "Unknown", dob: str = "",
+                  mrn: str = "") -> dict[str, Any]:
+    """A valid patient with every collection present and empty."""
+    return {
+        "id": pid,
+        "name": name,
+        "dob": dob,
+        "mrn": mrn,
+        **{c: [] for c in COLLECTIONS},
+    }
+
+
+def _next_id(prefix: str, used: set[str]) -> str:
+    n = 1
+    while f"{prefix}_{n:04d}" in used:
+        n += 1
+    nid = f"{prefix}_{n:04d}"
+    used.add(nid)
+    return nid
+
+
+def build_patient(facts: Iterable[Fact], pid: str = "pat_001",
+                  name: str = "Unknown", dob: str = "", mrn: str = "") -> dict[str, Any]:
+    """Assemble a patient record from extracted facts.
+
+    Facts are deduplicated on (kind, name, timestamp, value) — the same lab
+    value uploaded twice from two portals is one observation, not two.
+    """
+    p = empty_patient(pid, name, dob, mrn)
+    used: set[str] = set()
+    seen: set[tuple] = set()
+
+    ordered = sorted(facts, key=lambda f: (f.timestamp or "", f.kind, f.name))
+
+    for f in ordered:
+        key = (f.kind, f.name.lower(), f.timestamp, str(f.value))
+        if key in seen:
+            continue
+        seen.add(key)
+        prov = {"source_doc_id": f.source_doc_id, "source_page": f.source_page,
+                "source_char_start": f.source_char_start,
+                "source_char_end": f.source_char_end,
+                "extractor": f.extractor}
+
+        if f.kind == "lab":
+            loinc = f.loinc or _LOINC.get(f.name.lower())
+            if loinc is None:
+                continue  # unmappable analytes are not publishable as lab nodes
+            abnormal = is_abnormal(f.value, f.ref_low, f.ref_high)
+            p["labs"].append({
+                "id": _next_id("lab", used),
+                "loinc": loinc, "value": f.value, "unit": f.unit,
+                "observed_at": f.timestamp, "ref_low": f.ref_low,
+                "ref_high": f.ref_high, "abnormal": abnormal, **prov,
+            })
+
+        elif f.kind == "med":
+            p["meds"].append({
+                "id": _next_id("med", used),
+                "name": f.name, "rxnorm": f.meta.get("rxnorm"),
+                "dose": f.meta.get("dose"), "frequency": f.meta.get("frequency"),
+                "start": f.timestamp, "end": f.meta.get("end"),
+                "active": f.meta.get("active", True), **prov,
+            })
+
+        elif f.kind == "dx":
+            p["diagnoses"].append({
+                "id": _next_id("dx", used),
+                "code": f.meta.get("code", ""), "display": f.name,
+                "onset": f.timestamp,
+                "category": f.meta.get("category", "unspecified"), **prov,
+            })
+
+        elif f.kind == "allergy":
+            p["allergies"].append({
+                "id": _next_id("alg", used), "substance": f.name,
+                "reaction": f.meta.get("reaction", ""),
+                "recorded_at": f.timestamp, **prov,
+            })
+
+        elif f.kind == "imaging":
+            p["imaging"].append({
+                "id": _next_id("img", used),
+                "modality": f.meta.get("modality", ""), "display": f.name,
+                "reported_at": f.timestamp, **prov,
+            })
+
+        elif f.kind == "note_stance":
+            p["notes"].append({
+                "id": _next_id("note", used), "text": f.name,
+                "observed_at": f.timestamp,
+                "stance": "negated" if f.negated else "asserted", **prov,
+            })
+
+        elif f.kind == "vital":
+            p["vitals"].append({
+                "id": _next_id("vs", used), "display": f.name, "unit": f.unit,
+                "points": [[f.timestamp, f.value]], **prov,
+            })
+
+    for coll in ("diagnoses", "labs", "meds", "notes", "imaging", "allergies", "vitals"):
+        p[coll].sort(key=lambda n: (n.get("onset") or n.get("observed_at")
+                                    or n.get("start") or n.get("recorded_at") or ""))
+    return p
+
+
+def merge_sources(documents: list[dict[str, Any]]) -> dict[str, list[Fact]]:
+    """Group facts by source document, preserving page order.
+
+    A document dict is {"doc_id": str, "facts": [Fact, ...]}.
+    """
+    grouped: dict[str, list[Fact]] = {}
+    for doc in documents:
+        grouped.setdefault(doc["doc_id"], []).extend(doc.get("facts", []))
+    for facts in grouped.values():
+        facts.sort(key=lambda f: (f.source_page, f.source_char_start))
+    return grouped
