@@ -289,7 +289,19 @@ class ClinicalGraph:
             self._add(d["id"], "Diagnosis", d["onset"], d)
             self.by_category[d["category"]].append(d["id"])
         for l in p["labs"]:
-            disp, unit, lo, hi, worse = ANALYTES[l["loinc"]]
+            row = ANALYTES.get(l["loinc"])
+            if row is None:
+                # A LOINC outside our terminology subset must not void the
+                # entire chart. One unfamiliar analyte previously raised
+                # KeyError inside _build, which propagated to a 404 and left
+                # the patient listing as zero nodes — a whole record silently
+                # erased by one unfamiliar code. The node is kept with its
+                # display name; only the derived range metadata is missing,
+                # which is a visible gap rather than a fabricated one.
+                disp = l.get("display") or l["loinc"]
+                unit, lo, hi, worse = l.get("unit", ""), None, None, True
+            else:
+                disp, unit, lo, hi, worse = row
             self._add(l["id"], "LabResult", l["observed_at"], {**l, "display": disp,
                                                               "hi_is_worse": worse})
         for m in p["meds"]:

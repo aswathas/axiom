@@ -603,7 +603,13 @@ class AxiomPipeline:
                 "abstained": [{"claim_id": "__refusal__", "action": "REFUSED",
                                "message": ("This record cannot support an answer "
                                            f"to that question: {reason}."),
-                               "escalate_to": "records request — data not "
+                               # ASCII only. This string reaches a browser and
+                               # a Windows console; an em-dash here rendered as
+                               # "â€”" in a demo screenshot because some hop in
+                               # the chain decoded UTF-8 as cp1252. A refusal
+                               # message that arrives mangled undercuts the
+                               # one moment this project is built around.
+                               "escalate_to": "records request - data not "
                                               "captured in this schema"}],
                 "audit_ref": ref,
             }
