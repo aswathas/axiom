@@ -100,17 +100,17 @@ DRUGS = {
 # node pair that must be present for the finding to be *findable*.
 INTERACTIONS = [
     ("warfarin", "ibuprofen", "critical",
-     "Additive anticoagulant/antiplatelet effect — bleeding risk."),
+     "Additive anticoagulant/antiplatelet effect - bleeding risk."),
     ("warfarin", "naproxen", "critical",
-     "Additive anticoagulant/antiplatelet effect — bleeding risk."),
+     "Additive anticoagulant/antiplatelet effect - bleeding risk."),
     ("warfarin", "amiodarone", "high",
-     "Amiodarone inhibits warfarin metabolism — INR may rise."),
+     "Amiodarone inhibits warfarin metabolism - INR may rise."),
     ("digoxin", "furosemide", "high",
      "Loop-diuretic-induced hypokalaemia potentiates digoxin toxicity."),
     ("lisinopril", "spironolactone", "high",
-     "Combined potassium retention — hyperkalaemia risk, requires monitoring."),
+     "Combined potassium retention - hyperkalaemia risk, requires monitoring."),
     ("digoxin", "spironolactone", "high",
-     "Both reduce renal potassium excretion — hyperkalaemia and toxicity risk."),
+     "Both reduce renal potassium excretion - hyperkalaemia and toxicity risk."),
 ]
 
 ALLERGENS = ["penicillin", "sulfa", "latex", "codeine", "iodinated contrast"]

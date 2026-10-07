@@ -115,8 +115,8 @@ class QueryPlanner:
         "address": "no address node type in the record schema",
         "phone": "no contact-detail node type",
         "password": "out of clinical scope",
-        "prescribe": "the system does not prescribe — out of scope by design",
-        "diagnose": "the system does not diagnose — out of scope by design",
+        "prescribe": "the system does not prescribe - out of scope by design",
+        "diagnose": "the system does not diagnose - out of scope by design",
         "gene": "no genomic resource in the record schema",
         "pregnan": "obstetric history is not modelled",
     }
@@ -163,7 +163,7 @@ class QueryPlanner:
                 return {
                     "answerable": False, "missing": concept,
                     "reason": (f"no {codes} is documented in this record. Absence "
-                               "of documentation is not absence of the condition — "
+                               "of documentation is not absence of the condition - "
                                "that requires chart review, not inference."),
                 }
         return {"answerable": True, "missing": None, "reason": ""}
@@ -390,7 +390,7 @@ class ClaimGenerator:
                 elif len(c.cited) == 0 and prior_reason == "absence_claim":
                     c.verdict = "ENTAILED"
                     c.reason = ("absence verified by enumerating the encounter "
-                                "sequence — no qualifying nodes exist")
+                                "sequence - no qualifying nodes exist")
                 else:
                     c.verdict = "INSUFFICIENT"
                     c.reason = "change claim with no supporting nodes"
@@ -429,9 +429,9 @@ ESCALATION = {
     "medication_interaction": "pharmacist review",
     "allergy_contraindication": "immediate clinician alert",
     "lab_trend": "clinician review at next appointment",
-    "diagnosis_change": "no escalation — informational",
+    "diagnosis_change": "no escalation - informational",
     "followup_gap": "scheduling team",
-    "administrative": "no escalation — informational",
+    "administrative": "no escalation - informational",
     "factual_lookup": "records request",
 }
 
@@ -590,15 +590,22 @@ class AxiomPipeline:
         # through to a general dump and we do not emit a hedged non-answer.
         if not cov["answerable"] or not ev.get("answerable", True):
             reason = cov["reason"] or ev.get("missing_evidence") or "insufficient evidence"
+            missing = cov.get("missing") or ev.get("missing_evidence")
             ref = self.audit.record_refusal(
                 patient["patient_id"], query, parsed, reason,
-                missing=cov.get("missing") or ev.get("missing_evidence"))
+                missing=missing)
+            # `missing` is what a clinician acts on: not "I won't answer" but
+            # "here is the specific test or concept whose absence caused it".
+            # It reached the audit trail but never the response, so the UI had
+            # to invent a placeholder for one of the three things a refusal is
+            # supposed to communicate.
             return {
                 "patient_id": patient["patient_id"],
                 "query": query,
                 "plan": parsed,
                 "refused": True,
                 "refusal_reason": reason,
+                "missing": missing,
                 "published": [],
                 "abstained": [{"claim_id": "__refusal__", "action": "REFUSED",
                                "message": ("This record cannot support an answer "
