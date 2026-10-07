@@ -347,6 +347,31 @@ def ask(payload: AskRequest, request: Request) -> dict[str, Any]:
         }
 
     result.setdefault("status", "refused" if result.get("refused") else "answered")
+
+    # An answer with nothing in it is not an answer.
+    #
+    # Measured case: "Does this patient have a pulmonary embolism?" against a
+    # chart with no such documentation returned refused=False with an EMPTY
+    # `published` list. To a clinician that renders as silence, and silence
+    # reads as "nothing to report" — which is precisely the confident-negative
+    # this system exists to refuse. Silence and absence-of-finding are not the
+    # same statement, and the wire format must never collapse them.
+    if not result.get("refused") and not result.get("published"):
+        result["refused"] = True
+        result["status"] = "refused"
+        result["refusal_reason"] = (
+            result.get("refusal_reason")
+            or "the record does not contain evidence that either supports or "
+               "excludes this claim; AXIOM will not infer one from silence."
+        )
+        result.setdefault("abstained", []).append({
+            "claim_id": "__refusal__",
+            "action": "REFUSED",
+            "message": ("No claim could be published for this question. Absence of "
+                        "a finding in the record is not a finding of absence."),
+            "escalate_to": "clinician review",
+        })
+
     try:
         store.record_audit(payload.patient_id, payload.query, result)
     except Exception:

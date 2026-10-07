@@ -376,6 +376,12 @@ class ClinicalGraph:
     def series(self, loinc: str) -> list[dict]:
         pts = [self.nodes[n] for n in self.by_type["LabResult"]
                if self.nodes[n]["loinc"] == loinc]
+        # A trajectory is a statement about change over time. An observation
+        # with no timestamp cannot be placed on that timeline, and sorting on
+        # None raised TypeError — which killed the creatinine trend, the single
+        # most important question in the demo. Undated values remain in the
+        # graph and remain citable; they are simply not points on a line.
+        pts = [p for p in pts if p.get("time") is not None]
         return sorted(pts, key=lambda n: n["time"])
 
     def trend(self, loinc: str, window_months: int | None = None) -> dict | None:
@@ -424,6 +430,8 @@ class ClinicalGraph:
         out = []
         for d in self.by_type["Diagnosis"]:
             dt = self.nodes[d]["time"]
+            if dt is None:
+                continue  # an undated diagnosis cannot be placed in a gap
             if dt < last_enc_time:
                 gap_days = (datetime.fromisoformat(last_enc_time)
                             - datetime.fromisoformat(dt)).days
@@ -445,6 +453,15 @@ class ClinicalGraph:
         for ntype in ("Diagnosis", "LabResult", "MedicationOrder", "Allergy"):
             for nid in self.by_type[ntype]:
                 t = self.nodes[nid]["time"]
+                # A node with no timestamp cannot participate in a temporal
+                # comparison. Prose extraction can produce undated facts ("a
+                # creatinine rise of 0.85 to 1.48" states no dates), and
+                # comparing str to None raised TypeError, which surfaced as a
+                # spurious refusal on a question the record *can* support.
+                # The observation is still in the graph — it just cannot be
+                # placed on a timeline, and pretending otherwise would be worse.
+                if t is None:
+                    continue
                 if prev < t <= cur:
                     out.append(nid)
         return out

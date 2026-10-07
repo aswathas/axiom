@@ -308,7 +308,12 @@ def test_parse_document_dispatches_rx():
     assert [f.kind for f in parse_document(RX_TEXT, "d")] == ["med"] * 3
 
 
-def test_parse_document_on_narrative_returns_no_regex_facts():
+def test_parse_document_on_narrative_returns_no_regex_facts(monkeypatch):
+    # These assert the *regex* path. The prose extractor is opt-in via
+    # AXIOM_PROSE_LLM, so pin it off — otherwise running the suite with
+    # that variable set turns a deterministic assertion into a network
+    # call against a rate-limited free tier.
+    monkeypatch.delenv("AXIOM_PROSE_LLM", raising=False)
     narrative = "DISCHARGE SUMMARY\n\nPatient denies chest pain.\n"
     assert parse_document(narrative, "d") == []
 

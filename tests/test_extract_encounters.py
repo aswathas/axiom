@@ -212,12 +212,22 @@ def test_parse_document_emits_encounters_for_lab():
     assert kinds.count("encounter") == 1
 
 
-def test_parse_document_emits_encounters_for_discharge_summary():
+def test_parse_document_emits_encounters_for_discharge_summary(monkeypatch):
+    # These assert the *regex* path. The prose extractor is opt-in via
+    # AXIOM_PROSE_LLM, so pin it off — otherwise running the suite with
+    # that variable set turns a deterministic assertion into a network
+    # call against a rate-limited free tier.
+    monkeypatch.delenv("AXIOM_PROSE_LLM", raising=False)
     facts = parse_document(DISCHARGE_TEXT, "d")
     assert [f.kind for f in facts] == ["encounter"]
 
 
-def test_parse_document_on_dateless_narrative_still_returns_nothing():
+def test_parse_document_on_dateless_narrative_still_returns_nothing(monkeypatch):
+    # These assert the *regex* path. The prose extractor is opt-in via
+    # AXIOM_PROSE_LLM, so pin it off — otherwise running the suite with
+    # that variable set turns a deterministic assertion into a network
+    # call against a rate-limited free tier.
+    monkeypatch.delenv("AXIOM_PROSE_LLM", raising=False)
     assert parse_document("DISCHARGE SUMMARY\n\nPatient denies chest pain.\n", "d") == []
 
 
