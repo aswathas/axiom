@@ -13,3 +13,6 @@ e2e*.db
 dbg.db
 demo_docs/
 .llm_cache/
+.tmpdbg/
+*.db-shm
+*.db-wal
