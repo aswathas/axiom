@@ -81,7 +81,12 @@ def test_detect_prefers_table_over_prose_when_both_present():
     regex purposes; the narrative extractor handles the prose."""
     mixed = NOTE_TEXT + "\n" + LAB_TEXT
     assert detect_kind(mixed) == "lab"
-    assert len(parse_document(mixed, "d")) == 2
+    kinds = [f.kind for f in parse_document(mixed, "d")]
+    assert kinds.count("lab") == 2
+    # The admission on the note side is still extracted: it is an exact date,
+    # and dropping it would cost us the graph's only time anchor. See
+    # axiom/extract/encounters.py.
+    assert kinds.count("encounter") == 1
 
 
 def test_detect_rx_beats_lab_on_rx_shaped_text():

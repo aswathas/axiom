@@ -299,7 +299,9 @@ def test_rx_empty_text():
 # --- dispatch ---------------------------------------------------------------
 
 def test_parse_document_dispatches_lab():
-    assert [f.kind for f in parse_document(LAB_TEXT, "d")] == ["lab"] * 4
+    # A lab report is also evidence of an outpatient encounter, so the
+    # encounter fact is appended after the analytes rather than replacing one.
+    assert [f.kind for f in parse_document(LAB_TEXT, "d")] == ["lab"] * 4 + ["encounter"]
 
 
 def test_parse_document_dispatches_rx():

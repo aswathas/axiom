@@ -76,7 +76,20 @@ def build_patient(facts: Iterable[Fact], pid: str = "pat_001",
                 "source_char_end": f.source_char_end,
                 "extractor": f.extractor}
 
-        if f.kind == "lab":
+        if f.kind == "encounter":
+            # Contract 2 shape. `type` is the visit kind (inpatient/outpatient);
+            # ClinicalGraph._add renames it to `encounter_type` on the node so it
+            # cannot shadow the structural node type.
+            p["encounters"].append({
+                "id": _next_id("enc", used),
+                "start": f.timestamp,
+                "type": f.meta.get("type", "unspecified"),
+                "admit": f.meta.get("admit"), "discharge": f.meta.get("discharge"),
+                "facility": f.meta.get("facility"),
+                "service": f.meta.get("service"), **prov,
+            })
+
+        elif f.kind == "lab":
             loinc = f.loinc or _LOINC.get(f.name.lower())
             if loinc is None:
                 continue  # unmappable analytes are not publishable as lab nodes
@@ -138,7 +151,8 @@ def build_patient(facts: Iterable[Fact], pid: str = "pat_001",
                 "points": [[f.timestamp, f.value]], **prov,
             })
 
-    for coll in ("diagnoses", "labs", "meds", "notes", "imaging", "allergies", "vitals"):
+    for coll in ("encounters", "diagnoses", "labs", "meds", "notes",
+                 "imaging", "allergies", "vitals"):
         p[coll].sort(key=lambda n: (n.get("onset") or n.get("observed_at")
                                     or n.get("start") or n.get("recorded_at") or ""))
     return p

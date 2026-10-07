@@ -14,7 +14,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field, asdict
 from typing import Any, Optional
 
-FACT_KINDS = ("lab", "med", "dx", "allergy", "note_stance", "vital", "imaging")
+FACT_KINDS = ("lab", "med", "dx", "allergy", "note_stance", "vital", "imaging",
+              # Encounters are the time anchors every temporal edge hangs off;
+              # ClinicalGraph emitted zero edges until this existed.
+              "encounter")
 
 EXTRACTORS = ("regex", "llm")
 

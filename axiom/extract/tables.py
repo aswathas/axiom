@@ -29,7 +29,7 @@ __all__ = [
     "parse_document",
     "detect_kind",
     "loinc_for_analyte",
-]
+]  # parse_encounters lives in axiom.extract.encounters (see below)
 
 
 # ---------------------------------------------------------------------------
@@ -313,12 +313,44 @@ def _offset_of(line: str, offset: int, name: str) -> Optional[int]:
 
 
 def parse_document(text: str, doc_id: str, page: int = 1) -> list[Fact]:
-    """Detect the document kind and run the matching deterministic parser."""
+    """Detect the document kind and run the matching deterministic parser.
+
+    Encounters run for *every* document kind, not just the notes: a lab report
+    is evidence of an outpatient encounter and a discharge summary is evidence
+    of an admission. They are appended after the kind-specific facts, so an
+    encounter is never mistaken for content of the document's primary type.
+    """
     kind = detect_kind(text)
+    facts: list[Fact] = []
     if kind == "lab":
-        return parse_lab_report(text, doc_id, page)
-    if kind == "rx":
-        return parse_rx_report(text, doc_id, page)
-    # "note" is narrative (Contract 3 Layout B) and is handled by the LLM
-    # extractor; a regex pass has nothing legitimate to return for it.
-    return []
+        facts.extend(parse_lab_report(text, doc_id, page))
+    elif kind == "rx":
+        facts.extend(parse_rx_report(text, doc_id, page))
+    # "note" is narrative (Contract 3 Layout B); its prose belongs to the LLM
+    # extractor, but its admit/discharge dates are exact and belong here.
+    #
+    # Imported here rather than at the top of the module: encounters.py builds
+    # on _lines_with_offsets and to_iso_date from this file, so a module-level
+    # import in both directions is a cycle.
+    from .encounters import parse_encounters
+
+    facts.extend(parse_encounters(text, doc_id, page))
+
+    # Contract 3 Layout B narrative. Off unless AXIOM_PROSE_LLM is switched on,
+    # so a test run, a benchmark or an offline box never spends network quota or
+    # waits on a rate-limited tier. On failure the LLM extractor returns [], so
+    # a bad tier costs us facts and never the upload.
+    if kind == "note" and _prose_enabled():
+        from .prose import extract_prose
+
+        facts.extend(extract_prose(text, doc_id, page))
+    return facts
+
+
+def _prose_enabled() -> bool:
+    """True when LLM prose extraction is explicitly switched on."""
+    import os
+
+    return os.environ.get("AXIOM_PROSE_LLM", "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
