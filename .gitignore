@@ -1,0 +1,11 @@
+node_modules/
+.next/
+__pycache__/
+*.pyc
+.env
+.env.*
+!.env.example
+.llm_cache/
+*.db
+axiom.db
+.DS_Store
