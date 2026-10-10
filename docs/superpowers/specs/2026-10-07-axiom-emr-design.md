@@ -141,7 +141,7 @@ axiom/
     prose.py        LLM extractor for free-text notes
     merge.py        dedupe + temporal ordering across documents
   render/
-    synthea.py      Synthea patient → realistic clinical documents
+    synthea.py      in-process synthetic patient → realistic clinical documents
     templates.py    Quest-style lab report, discharge summary
     degrade.py      page image, skew, shadow, blur, JPEG artifacts
   store.py          SQLite schema + repository
@@ -267,8 +267,10 @@ transcribed into a chat transcript.
 
 ### 5.1 Provenance
 
-Synthea patients (free, no credentialing, real clinical distributions: real disease
-progression, real medication histories, real lab trajectories).
+Self-generated synthetic patients via `axiom.clinical.PatientGenerator` (in-process,
+reproducible from a fixed seed, realistic clinical distributions: real disease
+progression, real medication histories, real lab trajectories). No upstream
+Synthea download or external data is used.
 
 ### 5.2 Why not real patient data
 
@@ -279,10 +281,10 @@ judge who learns our demo used real patient data ends the conversation.
 
 We state the synthetic origin **out loud, unprompted**. Honesty here is the pitch.
 
-### 5.3 Synthea → documents → upload
+### 5.3 Synthetic patient → documents → upload
 
 ```
-Synthea patient record
+Synthetic patient record (axiom.clinical.PatientGenerator)
     ├─ render → Quest-style lab report PDF, real reference ranges
     ├─ render → hospital discharge summary PDF, narrative prose
     ├─ render → pharmacy medication printout
@@ -290,7 +292,7 @@ Synthea patient record
                     ↓ upload through the real pipeline
 ```
 
-The demo therefore has **real clinical data underneath**, in **real document
+The demo therefore has **realistic synthetic clinical data underneath**, in **real document
 formats**, ingested the **messy way real documents arrive**.
 
 ### 5.4 Accepted consequence of auto-accept
@@ -390,7 +392,7 @@ Presented unprompted, before any judge asks:
 ## 10. Hour-by-hour schedule
 
 ### Hour 0–6 — Data + ingest
-- Synthea download, patient selection (5 patients)
+- Synthetic patient generation (`axiom.clinical`) + document corpus (5 patients)
 - `render/` — lab report, discharge summary, Rx templates
 - `degrade.py` — phone-photo simulation
 - PyMuPDF + Tesseract extraction verified on all four doc types
@@ -442,7 +444,7 @@ Presented unprompted, before any judge asks:
 | Model returns malformed JSON | High | Schema hint + retry + regex fallback; a query planner failure degrades fluency, not correctness |
 | OCR fails on degraded photos | Medium | Preprocessing pass; the deterministic table parser salvages what OCR gets |
 | Timeline slip | Medium | Doc types ship in sequence; stage 1 is independently demoable |
-| Judge dismisses synthetic data | Medium | Volunteer it at 2:40; Synthea provenance is stated up front |
+| Judge dismisses synthetic data | Medium | Volunteer it at 2:40; self-generated synthetic provenance is stated up front |
 | Hall network unavailable | Low | Pre-warmed cache means zero network dependency at demo time |
 
 ---
