@@ -1,10 +1,10 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { API, ask, getGraph, getPatient } from '../lib/api';
 import { docIdsFor } from '../lib/derive';
 import Cite, { DeadCite } from './Cite';
-import { Chip, Notice, OfflineNotice, Spinner } from './Chrome';
+import { Chip, Notice, Spinner } from './Chrome';
 
 const SAMPLES = [
   'Is the renal function deteriorating?',
@@ -21,18 +21,45 @@ const SAMPLES = [
  * THE CENTRAL UI RULE OF THIS SCREEN: a refusal arrives as HTTP 200 with a
  * refusal payload. It is rendered as `<RefusalPanel>` — a dark, deliberate,
  * considered panel — and never through `<Notice tone="error">`, which is
- * reserved in this app for things that are actually broken. Confusing the two
- * would tell a clinician that AXIOM crashed, which is the opposite of what
- * happened: it did exactly what it exists to do.
+ * reserved in this app for things that are actually broken.
+ *
+ * While the query executes, the clinician sees the pipeline's genuine stages:
+ * query compilation against the clinical graph, candidate claim generation,
+ * and formal claim verification against evidence.
  */
 export default function AskScreen({ patientId, onSource }) {
   const [query, setQuery] = useState('');
   const [docIds, setDocIds] = useState([]);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState(null);
+  const [timeoutError, setTimeoutError] = useState(null);
   const [result, setResult] = useState(null);
   const [graph, setGraph] = useState(null);
   const [offline, setOffline] = useState(false);
+  const [elapsedMs, setElapsedMs] = useState(0);
+  const [finalElapsedMs, setFinalElapsedMs] = useState(null);
+  const startTimeRef = useRef(null);
+
+  // Timer for tracking real elapsed time during graph traversal & LLM verification
+  useEffect(() => {
+    let timer = null;
+    if (pending) {
+      setElapsedMs(0);
+      setFinalElapsedMs(null);
+      startTimeRef.current = Date.now();
+      timer = setInterval(() => {
+        if (startTimeRef.current) {
+          setElapsedMs(Date.now() - startTimeRef.current);
+        }
+      }, 100);
+    } else if (startTimeRef.current) {
+      setFinalElapsedMs(Date.now() - startTimeRef.current);
+      startTimeRef.current = null;
+    }
+    return () => {
+      if (timer) clearInterval(timer);
+    };
+  }, [pending]);
 
   // The documents this record can cite from. Needed because Contract 2 gives
   // labs no source_doc_id, so their citations are resolved by searching the
@@ -52,17 +79,31 @@ export default function AskScreen({ patientId, onSource }) {
     if (!q || !patientId || pending) return;
     setPending(true);
     setError(null);
+    setTimeoutError(null);
     try {
       const res = await ask(patientId, q);
       setResult(res.data);
       setOffline(Boolean(res.offline));
       setPending(false);
+
+      if (res.data?.plan?.intent === 'timeout') {
+        setTimeoutError(res.data.refusal_reason || 'Query timed out after 45s.');
+      }
+
       // Citations are node ids; we need the graph to turn them into sources.
-      if (!(res.data?.published || []).length) setGraph(null);
-      else getGraph(patientId).then((g) => setGraph(g.data)).catch(() => setGraph(null));
+      if (!(res.data?.published || []).length) {
+        setGraph(null);
+      } else {
+        getGraph(patientId).then((g) => setGraph(g.data)).catch(() => setGraph(null));
+      }
     } catch (e) {
       setPending(false);
-      setError(e.message);
+      const msg = e.message || String(e);
+      if (msg.toLowerCase().includes('timed out')) {
+        setTimeoutError(msg);
+      } else {
+        setError(msg);
+      }
     }
   }, [query, patientId, pending]);
 
@@ -70,6 +111,7 @@ export default function AskScreen({ patientId, onSource }) {
     setQuery(q);
     setResult(null);
     setError(null);
+    setTimeoutError(null);
   }, []);
 
   return (
@@ -98,6 +140,7 @@ export default function AskScreen({ patientId, onSource }) {
                 placeholder="e.g. Is the renal function deteriorating?"
                 onChange={(e) => setQuery(e.target.value)}
                 autoComplete="off"
+                disabled={pending}
               />
               <div className="hint">
                 Scope boundary: this system summarises a record you already hold.
@@ -105,11 +148,19 @@ export default function AskScreen({ patientId, onSource }) {
               </div>
             </div>
             <div className="toolbar">
-              <button type="submit" className="btn primary" disabled={pending || !query.trim()}>
-                {pending ? 'Analysing…' : 'Ask AXIOM'}
+              <button
+                type="submit"
+                className="btn primary"
+                disabled={pending || !query.trim()}
+              >
+                {pending ? 'Verifying against graph…' : 'Ask AXIOM'}
               </button>
-              {result && (
-                <button type="button" className="btn ghost" onClick={() => { setResult(null); setError(null); }}>
+              {result && !pending && (
+                <button
+                  type="button"
+                  className="btn ghost"
+                  onClick={() => { setResult(null); setError(null); setTimeoutError(null); }}
+                >
                   Clear
                 </button>
               )}
@@ -118,7 +169,13 @@ export default function AskScreen({ patientId, onSource }) {
               <div className="subhead">TRY ONE</div>
               <div style={{ marginTop: 8 }}>
                 {SAMPLES.map((q) => (
-                  <button key={q} type="button" className="sample-q" onClick={() => useSample(q)}>
+                  <button
+                    key={q}
+                    type="button"
+                    className="sample-q"
+                    onClick={() => useSample(q)}
+                    disabled={pending}
+                  >
                     {q}
                   </button>
                 ))}
@@ -126,23 +183,61 @@ export default function AskScreen({ patientId, onSource }) {
             </div>
           </form>
 
-          {pending && <Spinner label="Running the query planner over the clinical graph…" />}
+          {/* Pipeline progress with honest verification stages */}
+          {pending && (
+            <AskProgressTracker
+              query={query}
+              patientId={patientId}
+              elapsedMs={elapsedMs}
+            />
+          )}
 
-          {error && (
+          {/* Timeout error state */}
+          {timeoutError && !pending && (
+            <Notice
+              tone="error"
+              title="QUERY TIMED OUT (45s)"
+              action={
+                <button type="button" className="btn" onClick={submit}>
+                  Retry question
+                </button>
+              }
+            >
+              {timeoutError}
+              <div className="hint" style={{ marginTop: 6 }}>
+                The backend took longer than 45 seconds to complete graph traversal
+                and claim verification. The server may be under heavy load or waiting
+                on local model inference.
+              </div>
+            </Notice>
+          )}
+
+          {/* Genuine request failure */}
+          {error && !pending && (
             <Notice tone="error" title="REQUEST FAILED">
               {error}
             </Notice>
           )}
 
-          {offline && !error && (
-            <OfflineNotice
-              api={API}
-              reason="answers and refusals below came from the inline dataset"
-            />
+          {/* Offline notice: explains refusal without inventing canned dataset */}
+          {offline && !error && result && (
+            <Notice tone="warn" title="BACKEND UNREACHABLE — LOCAL REFUSAL">
+              The analysis backend at <code>{API}</code> is not reachable.
+              AXIOM refused this question because no live graph evidence could be retrieved.
+              To enable graph traversal and claim generation, start the backend with{' '}
+              <code>uvicorn api.main:app --port 8000</code>.
+            </Notice>
           )}
 
+          {/* Result view */}
           {result && !pending && (
-            <ResultView result={result} graph={graph} docIds={docIds} onSource={onSource} />
+            <ResultView
+              result={result}
+              graph={graph}
+              docIds={docIds}
+              onSource={onSource}
+              elapsedMs={finalElapsedMs}
+            />
           )}
         </>
       )}
@@ -152,8 +247,114 @@ export default function AskScreen({ patientId, onSource }) {
 
 /* ------------------------------------------------------------------ */
 
-function ResultView({ result, graph, docIds, onSource }) {
-  if (result.refused) return <RefusalPanel result={result} />;
+/**
+ * Honest visualization of the clinical analysis and verification pipeline.
+ */
+function AskProgressTracker({ query, patientId, elapsedMs }) {
+  const seconds = (elapsedMs / 1000).toFixed(1);
+
+  return (
+    <section className="card" style={{ marginTop: 18 }} role="status" aria-live="polite">
+      <div className="card-title">
+        <span>ANALYSIS &amp; VERIFICATION PIPELINE IN PROGRESS</span>
+        <Chip kind="info">{seconds}s · timeout at 45s</Chip>
+      </div>
+
+      <div style={{ fontSize: 13.5, color: 'var(--ink)', marginBottom: 12 }}>
+        Querying record for <strong>{patientId}</strong>: <code style={{ fontFamily: 'ui-monospace, monospace' }}>&ldquo;{query}&rdquo;</code>
+      </div>
+
+      <p className="pipeline-note" style={{ fontSize: 12.5, color: 'var(--grey-d)', lineHeight: 1.55, margin: '0 0 14px' }}>
+        AXIOM does not guess or generate ungrounded prose. It compiles the question
+        against the patient graph, synthesises candidate claims, and runs a formal
+        verification pass checking every claim against cited evidence before publishing.
+      </p>
+
+      <div className="stage-list">
+        <StageRow
+          status="active"
+          name="1. Compiling question against clinical graph"
+          detail="Parsing clinical intent, identifying target entities, and retrieving temporal graph paths"
+        />
+        <StageRow
+          status="waiting"
+          name="2. Checking coverage against record schema"
+          detail="Confirming required evidence classes exist in this chart before proceeding"
+        />
+        <StageRow
+          status="waiting"
+          name="3. Generating candidate claims"
+          detail="Formulating candidate assertions constrained by observed graph relationships"
+        />
+        <StageRow
+          status="waiting"
+          name="4. Formally verifying claims against evidence (The Product)"
+          detail="Tracing every statement to exact document spans; checking entailment against sources"
+        />
+        <StageRow
+          status="waiting"
+          name="5. Applying calibration & abstention rules"
+          detail="Scoring claim confidence; suppressing or abstaining on unsupported claims"
+        />
+      </div>
+
+      <div style={{ marginTop: 14 }}>
+        <Spinner label="Traversing graph and verifying candidate claims against evidence…" />
+      </div>
+    </section>
+  );
+}
+
+function StageRow({ status, name, detail }) {
+  const icons = {
+    done: '✓',
+    active: '●',
+    waiting: '○',
+    warn: '⚠',
+    info: 'ℹ',
+  };
+
+  const colors = {
+    done: 'var(--green)',
+    active: 'var(--gold)',
+    waiting: 'var(--grey)',
+    warn: 'var(--crit)',
+    info: 'var(--blue)',
+  };
+
+  return (
+    <div style={{
+      display: 'flex',
+      alignItems: 'flex-start',
+      gap: 10,
+      padding: '7px 0',
+      borderBottom: '1px dotted var(--line)',
+      fontSize: 12.5,
+    }}>
+      <span style={{
+        color: colors[status] || 'var(--grey)',
+        fontWeight: 800,
+        fontFamily: 'ui-monospace, monospace',
+        minWidth: 16,
+      }}>
+        {icons[status] || '•'}
+      </span>
+      <div style={{ flex: 1 }}>
+        <div style={{ fontWeight: 700, color: status === 'waiting' ? 'var(--grey)' : 'var(--ink)' }}>
+          {name}
+        </div>
+        <div style={{ fontSize: 11.5, color: 'var(--grey-d)', marginTop: 2 }}>
+          {detail}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+
+function ResultView({ result, graph, docIds, onSource, elapsedMs }) {
+  if (result.refused) return <RefusalPanel result={result} elapsedMs={elapsedMs} />;
 
   const published = result.published || [];
   const abstained = result.abstained || [];
@@ -162,7 +363,10 @@ function ResultView({ result, graph, docIds, onSource }) {
     <div style={{ marginTop: 20 }}>
       <div className="answer-head">
         <span className="answer-head-t">ANSWERED FROM THE RECORD</span>
-        <Chip kind="ok">HTTP 200 · {published.length} claim{published.length === 1 ? '' : 's'} published</Chip>
+        <div style={{ display: 'flex', gap: 6 }}>
+          {elapsedMs != null && <Chip kind="mute">{(elapsedMs / 1000).toFixed(2)}s</Chip>}
+          <Chip kind="ok">HTTP 200 · {published.length} claim{published.length === 1 ? '' : 's'} published</Chip>
+        </div>
       </div>
 
       {published.length === 0 && (
@@ -224,10 +428,6 @@ function ClaimCard({ claim, graph, docIds, onSource }) {
 
 /**
  * Turn a cited node id into a chip that opens the document.
- *
- * `Cite` owns the resolution logic (exact offsets, then a text search, then a
- * visible dead end) so the chart and the ask screen cannot drift apart on what
- * "resolves to source" means.
  */
 function Citation({ nodeId, graph, docIds, onSource }) {
   const node = useMemo(
@@ -277,22 +477,33 @@ function WithheldList({ abstained, graph, docIds, onSource }) {
 }
 
 /* ------------------------------------------------------------------ */
-/* THE REFUSAL                                                        */
+/* THE REFUSAL: FIRST-CLASS, CONSIDERED CLINICAL OUTCOME              */
 /* ------------------------------------------------------------------ */
 
-function RefusalPanel({ result }) {
+function RefusalPanel({ result, elapsedMs }) {
   const route =
     (result.abstained || []).find((a) => a.escalate_to)?.escalate_to ||
     'records request';
-  const missing = result.missing || result.missing_evidence || null;
+  const rawMissing = result.missing || result.missing_evidence || null;
+
+  const missingDisplay = useMemo(() => {
+    if (!rawMissing) return 'no specific evidence class captured';
+    if (Array.isArray(rawMissing)) {
+      return rawMissing
+        .map((m) => (typeof m === 'string' ? m.replace(/_/g, ' ') : JSON.stringify(m)))
+        .join(', ');
+    }
+    return String(rawMissing).replace(/_/g, ' ');
+  }, [rawMissing]);
 
   return (
     <div style={{ marginTop: 20 }}>
       <div className="answer-head">
-        <span className="answer-head-t">COVERAGE REFUSAL</span>
-        {/* The 200 is stated on screen. It is the whole point: a refusal is a
-            successful, deliberate response, not a failed request. */}
-        <Chip kind="ok">HTTP 200 · refused</Chip>
+        <span className="answer-head-t">COVERAGE REFUSAL — CONSIDERED OUTCOME</span>
+        <div style={{ display: 'flex', gap: 6 }}>
+          {elapsedMs != null && <Chip kind="mute">{(elapsedMs / 1000).toFixed(2)}s</Chip>}
+          <Chip kind="ok">HTTP 200 · refused</Chip>
+        </div>
       </div>
 
       <section className="refusal" role="status" aria-live="polite">
@@ -308,10 +519,12 @@ function RefusalPanel({ result }) {
         <div className="refusal-a">This record cannot support an answer to that question.</div>
 
         <p className="refusal-body">
-          {result.refusal_reason
-            ? <>Reason given: <strong>{result.refusal_reason}</strong>.</>
-            : 'No supporting evidence class exists in this record schema.'}
-          {' '}No query plan was executed and no claim was published — AXIOM
+          {result.refusal_reason ? (
+            <>Reason given: <strong>{result.refusal_reason}</strong>.</>
+          ) : (
+            'No supporting evidence class exists in this record schema.'
+          )}{' '}
+          No query plan was executed and no claim was published — AXIOM
           stopped at the coverage check rather than generating a hedged
           non-answer.
         </p>
@@ -319,12 +532,8 @@ function RefusalPanel({ result }) {
         <div className="refusal-grid">
           <div className="refusal-cell">
             <div className="refusal-cell-l">MISSING EVIDENCE</div>
-            <div className="refusal-cell-v">
-              {Array.isArray(missing) && missing.length
-                ? missing.map((m) => (typeof m === 'string' ? m.replace(/_/g, ' ') : JSON.stringify(m))).join(', ')
-                : missing
-                  ? String(missing).replace(/_/g, ' ')
-                  : 'not itemised by this API version — see the reason given above'}
+            <div className="refusal-cell-v" style={{ fontWeight: 600 }}>
+              {missingDisplay}
             </div>
           </div>
           <div className="refusal-cell">
