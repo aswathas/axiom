@@ -232,3 +232,26 @@ is a 200 with the refusal payload. This is the core product behaviour.
 
 Shared files (`axiom/facts.py`, `axiom/patient.py`, `axiom/__init__.py`) are
 **integrator-owned**. Agents import them; agents do not edit them.
+
+---
+
+## Additive Extension — Patient Registry & Document Attribution (Additive to Contract 5)
+
+> **Additive Extension (2026-10-10).** Adds explicit patient creation, demographics management, and retroactive document attribution. Existing frozen contracts (Contracts 1–6) remain strictly unchanged.
+
+```
+POST   /api/patients                         -> {"id","name","dob","mrn","sex","created_at",...}
+GET    /api/patients                         -> [{"id","name","dob","mrn","sex","created_at","doc_count","node_count"}]
+GET    /api/patients/{id}                    -> patient dict (Contract 2 shape + "sex", "created_at")
+PATCH  /api/patients/{id}                    -> patient dict (update demographics)
+PUT    /api/patients/{id}                    -> patient dict (update demographics)
+POST   /api/patients/{id}/documents/{doc_id} -> {"doc_id","patient_id","filename","kind","sha256","created_at","attached":true}
+GET    /api/patients/{id}/documents          -> [{"doc_id","patient_id","filename","kind","sha256","created_at"}]
+```
+
+**Registry Rules & Invariants:**
+- `POST /api/patients`: MRN is required and non-empty. DOB must parse as an ISO-8601 date. Name is required. Sex is optional.
+- MRN uniqueness is strictly enforced at the store layer. Duplicate MRNs return HTTP 409 Conflict (never silent overwrites).
+- Malformed inputs (empty MRN, invalid DOB, empty Name) return HTTP 400 at the trust boundary.
+- `POST /api/patients/{id}/documents/{doc_id}` attaches an ingested document to a registry patient, attributes all document facts to the patient, and rebuilds the clinical graph.
+- `GET /api/patients/{id}/documents` lists documents attached to the patient; returns 404 if patient does not exist.

@@ -24,6 +24,14 @@ from .engine import build_graph, contract2_to_engine, engine_to_contract2, norma
 from .ingest import (UnsupportedDocument, extract_demographics, extract_pages,
                       sha256_hex)
 from .planner import build_planner
+from .registry import (PatientCreatePayload, PatientUpdatePayload,
+                       attach_document_to_patient, create_patient_record,
+                       get_patient_record, list_patient_documents,
+                       list_patient_records, rebuild_patient_chart,
+                       update_patient_record)
+from .store import (DocumentNotFoundError, DuplicateMRNError,
+                    DuplicatePatientError, PatientNotFoundError,
+                    ValidationError)
 
 log = logging.getLogger("axiom.api")
 
@@ -80,32 +88,71 @@ def health() -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Patients
+# Patients & Registry
 # ---------------------------------------------------------------------------
+
+@router.post("/patients")
+def create_patient(payload: PatientCreatePayload, request: Request) -> dict[str, Any]:
+    store = request.app.state.store
+    raw_data = payload.model_dump() if hasattr(payload, "model_dump") else payload.dict()
+    try:
+        return create_patient_record(store, raw_data)
+    except ValidationError as exc:
+        raise HTTPException(400, exc.message)
+    except (DuplicateMRNError, DuplicatePatientError) as exc:
+        raise HTTPException(409, exc.message)
+
 
 @router.get("/patients")
 def list_patients(request: Request) -> list[dict[str, Any]]:
     store = request.app.state.store
-    out = []
-    for row in store.list_patients():
-        patient = store.get_patient(row["id"])
-        node_count = 0
-        if patient is not None:
-            try:
-                node_count = len(build_graph(patient).nodes)
-            except ValueError:
-                node_count = 0  # a malformed record lists with 0, never 500s
-        out.append({**row, "node_count": node_count})
-    return out
+    return list_patient_records(store)
 
 
 @router.get("/patients/{patient_id}")
 def get_patient(patient_id: str, request: Request) -> dict[str, Any]:
     store = request.app.state.store
-    patient = store.get_patient(patient_id)
-    if patient is None:
-        raise HTTPException(404, f"unknown patient {patient_id!r}")
-    return engine_to_contract2(normalise_patient(patient))
+    try:
+        return get_patient_record(store, patient_id)
+    except PatientNotFoundError as exc:
+        raise HTTPException(404, exc.message)
+
+
+@router.patch("/patients/{patient_id}")
+@router.put("/patients/{patient_id}")
+def update_patient_demographics(patient_id: str, payload: PatientUpdatePayload,
+                                request: Request) -> dict[str, Any]:
+    store = request.app.state.store
+    raw_data = payload.model_dump(exclude_unset=True) if hasattr(payload, "model_dump") else payload.dict(exclude_unset=True)
+    try:
+        return update_patient_record(store, patient_id, raw_data)
+    except PatientNotFoundError as exc:
+        raise HTTPException(404, exc.message)
+    except ValidationError as exc:
+        raise HTTPException(400, exc.message)
+    except DuplicateMRNError as exc:
+        raise HTTPException(409, exc.message)
+
+
+@router.post("/patients/{patient_id}/documents/{doc_id}")
+def attach_patient_document(patient_id: str, doc_id: str,
+                            request: Request) -> dict[str, Any]:
+    store = request.app.state.store
+    try:
+        return attach_document_to_patient(store, patient_id, doc_id)
+    except PatientNotFoundError as exc:
+        raise HTTPException(404, exc.message)
+    except DocumentNotFoundError as exc:
+        raise HTTPException(404, exc.message)
+
+
+@router.get("/patients/{patient_id}/documents")
+def get_patient_documents(patient_id: str, request: Request) -> list[dict[str, Any]]:
+    store = request.app.state.store
+    try:
+        return list_patient_documents(store, patient_id)
+    except PatientNotFoundError as exc:
+        raise HTTPException(404, exc.message)
 
 
 @router.get("/patients/{patient_id}/graph")
@@ -262,34 +309,7 @@ async def upload(request: Request,
 
 def _rebuild_patient(store: Any, patient_id: str) -> dict[str, Any]:
     """Re-derive the patient's chart from all stored facts."""
-    from axiom.facts import from_dict as fact_from_dict
-    from axiom.patient import build_patient
-
-    prior = store.get_patient(patient_id) or {}
-    raw_facts = store.get_facts_for_patient(patient_id)
-    facts = []
-    for rf in raw_facts:
-        payload = rf.get("fact_json") or rf
-        if isinstance(payload, str):
-            import json as _json
-            try:
-                payload = _json.loads(payload)
-            except ValueError:
-                continue
-        try:
-            facts.append(fact_from_dict(payload))
-        except (TypeError, ValueError):
-            continue
-
-    patient = build_patient(
-        facts,
-        pid=patient_id,
-        name=prior.get("name", "") or "",
-        dob=prior.get("dob", "") or "",
-        mrn=prior.get("mrn", "") or "",
-    )
-    store.update_patient(patient)
-    return patient
+    return rebuild_patient_chart(store, patient_id)
 
 
 # ---------------------------------------------------------------------------
