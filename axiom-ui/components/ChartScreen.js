@@ -7,7 +7,7 @@ import { computeTrends, docIdsFor, nodeLabel, sourceOf } from '../lib/derive';
 import Cite from './Cite';
 import Timeline from './Timeline';
 import TrendChart from './TrendChart';
-import { Chip, Notice, OfflineNotice, Spinner } from './Chrome';
+import { Chip, Notice, Spinner } from './Chrome';
 
 const TYPE_ORDER = [
   'Diagnosis', 'LabResult', 'MedicationOrder', 'Allergy',
@@ -18,9 +18,8 @@ const TYPE_ORDER = [
  * Scene 02 — the chart. `GET /api/patients/{id}` and `/graph`.
  *
  * Every card here is a claim about the patient and every card carries its
- * provenance. A card whose node has no `source_doc_id` says so in words
- * instead of rendering a dead link — and when the term can be located in a
- * document this record does reference, we find the real offsets and open them.
+ * provenance. When the backend is unreachable, AXIOM fails loudly rather than
+ * displaying invented patients.
  */
 export default function ChartScreen({ patientId, onAsk, onSource }) {
   const patient = useResource(
@@ -43,6 +42,9 @@ export default function ChartScreen({ patientId, onAsk, onSource }) {
     );
   }
 
+  const isOffline = patient.isOffline || graph.isOffline;
+  const hasError = patient.error || graph.error;
+
   return (
     <>
       <h1 className="page">Chart</h1>
@@ -51,23 +53,32 @@ export default function ChartScreen({ patientId, onAsk, onSource }) {
         statement about this patient, and every one of them opens its source.
       </p>
 
-      {(patient.offline || graph.offline) && (
-        <OfflineNotice api={API} onRetry={() => { patient.reload(); graph.reload(); }}
-          reason={patient.reason || graph.reason} />
+      {hasError && (
+        <Notice
+          tone="error"
+          title={isOffline ? 'BACKEND NOT REACHABLE — NO RECORD TO SHOW' : 'COULD NOT LOAD THE PATIENT'}
+          action={
+            <div style={{ marginTop: 8 }}>
+              <button
+                type="button"
+                className="btn"
+                onClick={() => {
+                  patient.reload();
+                  graph.reload();
+                }}
+              >
+                Retry
+              </button>
+            </div>
+          }
+        >
+          {patient.error || graph.error}
+        </Notice>
       )}
 
       {patient.loading && <Spinner label={`Loading ${patientId}…`} />}
 
-      {patient.error && (
-        <Notice tone="error" title="COULD NOT LOAD THE PATIENT">
-          {patient.error}
-          <div style={{ marginTop: 8 }}>
-            <button type="button" className="btn" onClick={patient.reload}>Retry</button>
-          </div>
-        </Notice>
-      )}
-
-      {patient.data && (
+      {!hasError && patient.data && (
         <PatientHeader
           patient={patient.data}
           stats={graph.data?.stats}
@@ -76,13 +87,7 @@ export default function ChartScreen({ patientId, onAsk, onSource }) {
         />
       )}
 
-      {graph.error && (
-        <Notice tone="error" title="GRAPH UNAVAILABLE">
-          {graph.error}
-        </Notice>
-      )}
-
-      {graph.data && (
+      {!hasError && graph.data && (
         <div className="cols">
           <div>
             <EvidenceCards
@@ -194,8 +199,6 @@ function EvidenceCards({ graph, patient, onSource }) {
         <div key={t} style={{ marginTop: 16 }}>
           <div className="subhead">{t.replace(/([A-Z])/g, ' $1').toUpperCase()}</div>
           {(grouped[t] || []).map((node) => {
-            // Location is shown only when the node carries provenance outright;
-            // otherwise Cite resolves it on click and says so if it cannot.
             const direct = sourceOf(node);
             return (
               <div key={node.id} className="evcard">

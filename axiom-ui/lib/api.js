@@ -9,16 +9,17 @@
  *    (unknown patient, malformed upload). Conflating "I won't answer" with
  *    "your request was wrong" would defeat the product.
  *
- * 2. **Fallback data is always labelled.** When the backend is down we serve
- *    inline fixtures so the demo does not show a blank screen — and every
- *    response comes back tagged `offline: true` so the UI can say so out loud
- *    rather than passing off canned data as live.
+ * 2. **Transport failures are loud; no fake data is ever served.** When the
+ *    backend is unreachable, AXIOM never falls back to canned fixture data.
+ *    Serving invented patients under the guise of an offline demo would be
+ *    the exact failure of accountability this product exists to prevent.
+ *    Unreachable endpoints fail loudly with an unmissable error directing
+ *    the clinician to start the backend with `uvicorn api.main:app --port 8000`.
+ *    The single exception is the ask path: an offline backend produces an
+ *    honest coverage refusal ("no evidence could be retrieved because the
+ *    analysis service is unreachable"), matching the product's own refusal
+ *    contract rather than crashing or inventing claims.
  */
-
-import {
-  PATIENTS, PATIENT_DETAIL, buildGraph, DOCS,
-  ASK_REFUSED,
-} from './fixtures';
 
 /**
  * Base URL shown in the chrome and used for direct calls.
@@ -51,11 +52,22 @@ export class ApiError extends Error {
   }
 }
 
-const TIMEOUT_MS = 8000;
+// Default client timeout for standard metadata requests.
+const DEFAULT_TIMEOUT_MS = 15000;
 
-async function raw(path, init = {}) {
+// Ask requests involve graph compilation, LLM-backed claim generation, and
+// formal claim verification against patient evidence. On local models or
+// slower hardware, this pipeline routinely requires 15–30s. The former 8000ms
+// timeout caused premature client-side aborts during legitimate verification
+// passes; 45s gives ample headroom for multi-pass reasoning and verification.
+const ASK_TIMEOUT_MS = 45000;
+
+// Upload involves PDF parsing, layout classification, and fact extraction.
+const UPLOAD_TIMEOUT_MS = 30000;
+
+async function raw(path, init = {}, timeoutMs = DEFAULT_TIMEOUT_MS) {
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     const res = await fetch(`${base()}${path}`, { ...init, signal: ctrl.signal });
     const text = await res.text();
@@ -68,12 +80,20 @@ async function raw(path, init = {}) {
       }
     }
     return { ok: res.ok, status: res.status, body };
+  } catch (err) {
+    if (ctrl.signal.aborted) {
+      throw new ApiError(
+        `Request to ${API}${path} timed out after ${timeoutMs / 1000}s. The backend may be busy running verification or waiting on model inference.`,
+        { kind: 'transport', status: 408 },
+      );
+    }
+    throw err;
   } finally {
     clearTimeout(timer);
   }
 }
 
-const offlineMessage = (path) =>
+export const offlineMessage = (path) =>
   new ApiError(
     `AXIOM backend is not reachable at ${API} (${path}). Start it with ` +
     `"uvicorn api.main:app --port 8000".`,
@@ -81,31 +101,23 @@ const offlineMessage = (path) =>
   );
 
 /**
- * Try the network, fall back to fixtures. Never throws for the read paths —
- * a 4xx from the backend (e.g. unknown patient) throws, because that is a
- * real answer the clinician needs to see, not a missing backend.
+ * Perform a network request without fallback. Unreachable backends and 5xx
+ * responses throw transport errors loudly instead of returning canned data.
  */
-async function withFallback(path, init, fallback) {
+async function request(path, init = {}, timeoutMs = DEFAULT_TIMEOUT_MS) {
   let res;
   try {
-    res = await raw(path, init);
+    res = await raw(path, init, timeoutMs);
   } catch (e) {
-    return {
-      data: fallback(),
-      offline: true,
-      offlineReason: String(e.message || e),
-    };
+    if (e instanceof ApiError) throw e;
+    throw offlineMessage(path);
   }
   if (!res.ok) {
     // A 5xx on a same-origin request usually means the proxy could not reach
-    // the backend, not that our request was wrong. Treat it as transport so
-    // the UI says "backend down" rather than inventing an application error.
+    // the backend. Treat it as transport so the UI says "backend down" with the
+    // exact startup command rather than inventing an application error.
     if (res.status >= 500) {
-      return {
-        data: fallback(),
-        offline: true,
-        offlineReason: `backend responded ${res.status} (treated as unreachable)`,
-      };
+      throw offlineMessage(path);
     }
     const detail =
       (res.body && (res.body.detail || res.body.message)) || `HTTP ${res.status}`;
@@ -115,11 +127,7 @@ async function withFallback(path, init, fallback) {
     );
   }
   if (res.body === null || res.body === undefined) {
-    return {
-      data: fallback(),
-      offline: true,
-      offlineReason: 'empty response body',
-    };
+    throw new ApiError('empty response body', { status: res.status, kind: 'parse' });
   }
   return { data: res.body, offline: false };
 }
@@ -130,10 +138,12 @@ async function withFallback(path, init, fallback) {
 
 export async function getHealth() {
   try {
-    const { ok, body } = await raw('/api/health');
+    const { ok, body } = await raw('/api/health', { cache: 'no-store' }, 5000);
     if (ok && body) return { data: body, offline: false };
-  } catch { /* fall through — a demo with one process down is expected */ }
-  return { data: HEALTH, offline: true };
+  } catch {
+    // Health probe failed — backend is offline
+  }
+  return { data: null, offline: true };
 }
 
 /* ------------------------------------------------------------------ */
@@ -141,35 +151,15 @@ export async function getHealth() {
 /* ------------------------------------------------------------------ */
 
 export async function listPatients() {
-  return withFallback(
-    '/api/patients',
-    { cache: 'no-store' },
-    () => PATIENTS,
-  );
+  return request('/api/patients', { cache: 'no-store' });
 }
 
 export async function getPatient(id) {
-  return withFallback(
-    `/api/patients/${encodeURIComponent(id)}`,
-    { cache: 'no-store' },
-    () => {
-      const p = PATIENT_DETAIL[id];
-      if (!p) throw new ApiError(`unknown patient ${id}`, { status: 404, kind: 'http' });
-      return p;
-    },
-  );
+  return request(`/api/patients/${encodeURIComponent(id)}`, { cache: 'no-store' });
 }
 
 export async function getGraph(id) {
-  return withFallback(
-    `/api/patients/${encodeURIComponent(id)}/graph`,
-    { cache: 'no-store' },
-    () => {
-      const p = PATIENT_DETAIL[id];
-      if (!p) throw new ApiError(`unknown patient ${id}`, { status: 404, kind: 'http' });
-      return buildGraph(p);
-    },
-  );
+  return request(`/api/patients/${encodeURIComponent(id)}/graph`, { cache: 'no-store' });
 }
 
 /* ------------------------------------------------------------------ */
@@ -183,11 +173,9 @@ export async function uploadDocument(file, patientId) {
 
   let res;
   try {
-    res = await raw('/api/upload', { method: 'POST', body: fd });
+    res = await raw('/api/upload', { method: 'POST', body: fd }, UPLOAD_TIMEOUT_MS);
   } catch (e) {
-    // Upload has no honest fallback: pretending a document was parsed when it
-    // was not would be a fabricated provenance record, which is the one thing
-    // this app must never do.
+    if (e instanceof ApiError) throw e;
     throw offlineMessage('/api/upload');
   }
   if (!res.ok) {
@@ -203,7 +191,7 @@ export async function uploadDocument(file, patientId) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Ask — the refusal is a success payload, not an error                */
+/* Ask — refusal is a success payload, not an error                    */
 /* ------------------------------------------------------------------ */
 
 export async function ask(patientId, query) {
@@ -211,24 +199,41 @@ export async function ask(patientId, query) {
 
   let res;
   try {
-    res = await raw('/api/ask', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: payload,
-    });
-  } catch {
-    return { ...refusalFallback(patientId, query), offline: true,
-             offlineReason: 'backend unreachable — showing the refusal this record would produce' };
+    res = await raw(
+      '/api/ask',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: payload,
+      },
+      ASK_TIMEOUT_MS,
+    );
+  } catch (e) {
+    const isTimeout = e instanceof ApiError && e.status === 408;
+    return {
+      ...refusalFallback(
+        patientId,
+        query,
+        isTimeout
+          ? `query timed out after ${ASK_TIMEOUT_MS / 1000}s — backend did not answer`
+          : `AXIOM backend is not reachable at ${API}. Start it with "uvicorn api.main:app --port 8000".`,
+        isTimeout ? 'timeout' : 'unreachable',
+      ),
+      offline: true,
+      offlineReason: isTimeout
+        ? `Request timed out after ${ASK_TIMEOUT_MS / 1000}s`
+        : `Backend unreachable at ${API}`,
+    };
   }
   if (!res.ok) {
-    // Same rule as withFallback: behind the Next proxy a dead backend surfaces
-    // as a 5xx rather than a transport failure. Without this branch a backend
-    // outage rendered as a red REQUEST FAILED box — telling the clinician
-    // AXIOM crashed, when the truth is that it had no evidence to work with
-    // and declined for exactly that reason.
     if (res.status >= 500) {
       return {
-        ...refusalFallback(patientId, query),
+        ...refusalFallback(
+          patientId,
+          query,
+          `backend responded ${res.status} (treated as unreachable)`,
+          'server_error',
+        ),
         offline: true,
         offlineReason: `backend responded ${res.status} (treated as unreachable)`,
       };
@@ -244,19 +249,43 @@ export async function ask(patientId, query) {
 }
 
 /**
- * The offline refusal is deliberately a REFUSAL, not an answer. If the backend
- * is down we do not have evidence for anything, so the honest payload is the
- * one the pipeline would emit for an unanswerable question.
+ * An offline or timed-out query produces an honest REFUSAL, never invented claims.
+ * Refusing when no backend is available communicates the truth: no evidence
+ * could be retrieved from the clinical graph, so no claim is asserted.
  */
-function refusalFallback(patientId, query) {
+function refusalFallback(patientId, query, reasonDetail, kind = 'unreachable') {
+  const isTimeout = kind === 'timeout';
+  const reason = isTimeout
+    ? `the query timed out after ${ASK_TIMEOUT_MS / 1000}s without a completed verification pass from the analysis service`
+    : `the analysis service is unreachable at ${API} (start it with "uvicorn api.main:app --port 8000"); no evidence could be retrieved from the record graph`;
+
+  const missing = isTimeout
+    ? ['timely verification response from analysis service']
+    : ['live backend service (uvicorn api.main:app --port 8000)'];
+
+  const escalation = isTimeout
+    ? 'retry with simpler query or check backend service performance'
+    : 'service operator — start backend with "uvicorn api.main:app --port 8000"';
+
   return {
     data: {
-      ...ASK_REFUSED,
       patient_id: patientId,
       query,
-      refusal_reason:
-        'the analysis service is unreachable, so no evidence could be retrieved; ' +
-        ASK_REFUSED.refusal_reason,
+      plan: { intent: isTimeout ? 'timeout' : 'offline', entity: null, window_months: null },
+      refused: true,
+      status: 'refused',
+      refusal_reason: reason,
+      missing,
+      missing_evidence: missing[0],
+      published: [],
+      abstained: [
+        {
+          claim_id: '__refusal__',
+          action: 'REFUSED',
+          message: `This record cannot support an answer to that question: ${reason}.`,
+          escalate_to: escalation,
+        },
+      ],
       audit_ref: null,
       degraded: true,
     },
@@ -269,21 +298,9 @@ function refusalFallback(patientId, query) {
 /* ------------------------------------------------------------------ */
 
 export async function getPage(docId, pageNo) {
-  return withFallback(
+  return request(
     `/api/documents/${encodeURIComponent(docId)}/page/${pageNo}`,
     { cache: 'no-store' },
-    () => {
-      const doc = DOCS[docId];
-      if (!doc) throw new ApiError(`unknown document ${docId}`, { status: 404, kind: 'http' });
-      const text = doc.pages[pageNo];
-      if (text === undefined) {
-        throw new ApiError(`document ${docId} has no page ${pageNo}`, { status: 404, kind: 'http' });
-      }
-      return {
-        doc_id: docId, page: pageNo, text, kind: doc.kind,
-        char_start: 0, char_end: text.length, ocr_used: false, fact_spans: [],
-      };
-    },
   );
 }
 
@@ -298,4 +315,3 @@ export async function listAudit(patientId) {
   }));
   return { data: ok && Array.isArray(body) ? body : [], offline: !ok };
 }
-

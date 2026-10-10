@@ -171,7 +171,7 @@ export default function SourceDrawer({ target, onClose }) {
               <span><span className="swatch cited" /> cited span</span>
               <span><span className="swatch other" /> other facts on this page</span>
               <span className="page-legend-off">
-                {state.offline ? 'fallback text' : 'live API text'}
+                live API text
               </span>
             </div>
             <div className="page-view" ref={textRef} tabIndex={0}>
