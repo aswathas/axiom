@@ -162,6 +162,63 @@ export async function getGraph(id) {
   return request(`/api/patients/${encodeURIComponent(id)}/graph`, { cache: 'no-store' });
 }
 
+export async function createPatient({ mrn, name, dob, ...rest } = {}) {
+  const res = await request('/api/patients', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mrn, name, dob, ...rest }),
+  });
+  const data = res.data;
+  if (data && typeof data === 'object') {
+    Object.defineProperty(data, 'data', { value: data, enumerable: false, writable: true });
+    Object.defineProperty(data, 'offline', { value: false, enumerable: false, writable: true });
+  }
+  return data;
+}
+
+export async function updatePatient(id, patch) {
+  const res = await request(`/api/patients/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch || {}),
+  });
+  if (res.data && typeof res.data === 'object' && !Array.isArray(res.data)) {
+    for (const key of Object.keys(res.data)) {
+      if (!(key in res)) {
+        Object.defineProperty(res, key, {
+          get: () => res.data[key],
+          enumerable: false,
+          configurable: true,
+        });
+      }
+    }
+  }
+  return res;
+}
+
+export async function listPatientDocuments(id) {
+  return request(`/api/patients/${encodeURIComponent(id)}/documents`, { cache: 'no-store' });
+}
+
+export async function attachDocumentToPatient(patientId, docId) {
+  const res = await request(
+    `/api/patients/${encodeURIComponent(patientId)}/documents/${encodeURIComponent(docId)}`,
+    { method: 'POST' },
+  );
+  if (res.data && typeof res.data === 'object' && !Array.isArray(res.data)) {
+    for (const key of Object.keys(res.data)) {
+      if (!(key in res)) {
+        Object.defineProperty(res, key, {
+          get: () => res.data[key],
+          enumerable: false,
+          configurable: true,
+        });
+      }
+    }
+  }
+  return res;
+}
+
 /* ------------------------------------------------------------------ */
 /* Upload                                                              */
 /* ------------------------------------------------------------------ */
