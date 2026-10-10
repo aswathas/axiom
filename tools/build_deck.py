@@ -294,8 +294,8 @@ def build() -> None:
     bullets(s, 0.75, 2.3, 6.3, 4.4, [
         ("The verifier is rule-based, not a model. ", "An LLM verifier would score "
          "materially lower. We say so first."),
-        ("All clinical data is synthetic, ", "generated from Synthea's physiological "
-         "model. Real disease trajectories, no real patients."),
+        ("All clinical data is self-generated. ", "We wrote both the records and "
+         "the answer key; recall measures our pipeline against our own assumptions."),
         ("Ingestion is fully automatic. ", "Nothing is clinician-confirmed. A "
          "mislabelled value becomes a permanent node."),
         ("We do not touch real PHI. ", "MIMIC-IV on PhysioNet is the legitimate "
