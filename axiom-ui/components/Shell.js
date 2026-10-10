@@ -36,7 +36,7 @@ function getActiveNav(pathname) {
 export default function Shell({ children }) {
   const pathname = usePathname();
   const [activePatientId, setActivePatientId] = useState(null);
-  const [health, setHealth] = useState({ data: null, offline: true });
+  const [health, setHealth] = useState({ data: null, offline: null });
   const [sourceTarget, setSourceTarget] = useState(null);
 
   const refreshHealth = useCallback(() => {
@@ -106,8 +106,22 @@ export default function Shell({ children }) {
           </div>
           <div className="topbar-meta">
             <div>{health.data ? `API ${health.data.llm || 'none'}` : 'API …'}</div>
-            <div style={{ color: health.offline ? '#d9a441' : '#6e6e6e' }}>
-              {health.offline ? 'fallback data' : 'live · ' + API.replace(/^https?:\/\//, '')}
+            <div
+              style={{
+                color:
+                  health.offline === null
+                    ? '#94a3b8'
+                    : health.offline
+                    ? 'var(--crit, #ef4444)'
+                    : '#6e6e6e',
+                fontWeight: health.offline ? 700 : 'normal',
+              }}
+            >
+              {health.offline === null
+                ? 'connecting · ' + API.replace(/^https?:\/\//, '')
+                : health.offline
+                ? 'offline · backend unreachable'
+                : 'live · ' + API.replace(/^https?:\/\//, '')}
             </div>
           </div>
         </div>
