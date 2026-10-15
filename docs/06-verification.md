@@ -83,10 +83,12 @@ reflects deterministic checks against known ground truth — ground truth the te
 generated. A bug in the verifier that made it over-permissive would improve every
 metric in the table.
 
-**No end-to-end test of the refusal path through the API.** The six unanswerable
-questions pass at the pipeline level. That `/api/ask` correctly converts "no supported
-claims" into `refused=true` was fixed on 2026-10-15 and has no regression test. The
-same defect can return.
+**Correction, 2026-10-16: the refusal path now has a regression test.** This file
+previously recorded that the `attempts/002` fix had none. That is no longer true.
+`tests/test_no_silent_answers.py` exists and asserts exactly the defect — including
+`test_empty_published_list_becomes_a_refusal` — against the `/api/ask` route.
+`python -m pytest tests/test_no_silent_answers.py` → 5 passed. The reference in
+`attempts/002` to "no regression test" is superseded by this note.
 
 **No test for the KeyError class.** `attempts/003` fixed one bare dictionary lookup.
 Whether any other builder stage raises on unexpected input was not checked, and the
